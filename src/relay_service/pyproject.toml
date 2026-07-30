@@ -1,0 +1,52 @@
+[project]
+name = "e2e-sales-genos-relay"
+version = "1.0.0"
+description = "Internal relay service: Apps Script → IDPS auth → GenOS"
+requires-python = ">=3.11,<3.13"
+
+dependencies = [
+    "fastapi >=0.115.0",
+    "uvicorn[standard] >=0.34.0",
+    "pydantic >=2.10.0",
+    "pydantic-settings >=2.8.0",
+    "requests >=2.31.0,<3.0.0",
+    # idps-sdk version matches the pinned version used across SBSEGAnalyticsDS services
+    "idps-sdk >=3.9944.3,<4.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "black >=25.0.0",
+    "isort >=6.0.0",
+    "mypy >=1.15.0",
+    "types-requests",
+]
+test = [
+    "pytest >=8.0.0",
+    "pytest-mock",
+    "pytest-cov >=6.0.0",
+    "httpx",           # FastAPI TestClient dependency
+    "pytest-asyncio >=0.14.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+# Intuit Artifactory — set UV_DEFAULT_INDEX in CI/CD
+# UV_DEFAULT_INDEX=https://artifact.intuit.com/artifactory/api/pypi/pypi-intuit/simple
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 100

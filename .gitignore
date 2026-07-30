@@ -141,3 +141,21 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# ── Python / data pipeline ──────────────────────────────────────────────
+# Never commit the local virtualenv (~278 MB) or compiled caches.
+src/data_pipeline/venv/
+venv/
+__pycache__/
+*.pyc
+
+# Query result exports / scratch data — may contain raw sales rows. Do NOT commit.
+src/data_pipeline/athena_test_output.csv
+*.csv
+src/data_pipeline/Untitled
+
+# Local scratch / one-off debug scripts (kept out of the shared repo).
+src/data_pipeline/test_*.py
+src/data_pipeline/trace_active_cancels.py
+src/data_pipeline/week52.py
+src/data_pipeline/test_override.py

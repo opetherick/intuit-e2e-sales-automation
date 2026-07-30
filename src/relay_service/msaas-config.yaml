@@ -1,0 +1,74 @@
+# MSaaS / IKS deployment config for e2e-sales-genos-relay.
+#
+# BEFORE FIRST DEPLOY — fill in every REPLACE_ME placeholder:
+#   service_name       → your chosen service slug (must match DevPortal asset alias suffix)
+#   asset_id           → numeric ID from DevPortal after asset registration
+#   deploy_repo        → create the -deployment repo in this org first
+#   argocd_*           → values from the MSaaS onboarding ticket
+#   environments.*     → cluster endpoints + namespaces assigned by IKS team
+#   meshPolicyId       → DevPortal mesh policy ID for each environment
+#   cloudRole          → IAM role assigned by IKS team
+#
+# Cluster endpoints below match the DNG spoke used by genos-ged-sail-svc and
+# agentfordashappv3 (ppd usw2) — confirm with IKS team before first deploy.
+
+l1: analytrep
+l2: ''
+git_org: SBSEGAnalyticsDS
+
+service_name: e2e-sales-genos-relay
+asset_id: REPLACE_WITH_DEVPORTAL_ASSET_ID
+asset_alias: Intuit.sbseganalyticsds.e2esalesgenosrelay
+code_repo: github.intuit.com/SBSEGAnalyticsDS/intuit-e2e-sales-automation.git
+deploy_repo: github.intuit.com/SBSEGAnalyticsDS/e2e-sales-genos-relay-deployment.git
+argocd_server: REPLACE_ME
+argocd_project: sbseganalyticsds-e2e-sales-genos-relay
+argocd_project_enabled: true
+
+registry: docker.intuit.com
+repo: sbseganalyticsds/e2e-sales-genos-relay/service
+
+preprodOnly: false
+SonarQubeAnalysis: false
+SonarQubeEnforce: false
+enableJiraTransition: false
+enableScorecardReadinessCheck: false
+skipScorecardManualFallback: false
+coberturaReportFile: '**/coverage/coverage.xml'
+
+environments:
+  e2e-usw2-air:
+    cluster: https://eksapi-sbg-qbo-ppd-usw2-k8s-65434b49d0262f59.elb.us-west-2.amazonaws.com
+    namespace: sbseganalyticsds-e2esalesgenosrelay-e2e
+    argocd_application: REPLACE_ME
+    region: usw2
+    meshPolicyId: REPLACE_ME
+    cloudRole: k8s-sbseganalyticsds-e2esalesgenosrelay-e2e
+    manifest_format: Express
+    iks_type: preprod
+    app_env: e2e
+    app_swimlane: default
+
+  qal-usw2-air:
+    cluster: https://eksapi-sbg-qbo-ppd-usw2-k8s-65434b49d0262f59.elb.us-west-2.amazonaws.com
+    namespace: sbseganalyticsds-e2esalesgenosrelay-qal
+    argocd_application: REPLACE_ME
+    region: usw2
+    meshPolicyId: REPLACE_ME
+    cloudRole: k8s-sbseganalyticsds-e2esalesgenosrelay-qal
+    manifest_format: Express
+    iks_type: preprod
+    app_env: qal
+    app_swimlane: default
+
+  prd-usw2-air:
+    cluster: REPLACE_ME
+    namespace: sbseganalyticsds-e2esalesgenosrelay-prd
+    argocd_application: REPLACE_ME
+    region: usw2
+    meshPolicyId: REPLACE_ME
+    cloudRole: k8s-sbseganalyticsds-e2esalesgenosrelay-prd
+    manifest_format: Express
+    iks_type: prod
+    app_env: prd
+    app_swimlane: default
