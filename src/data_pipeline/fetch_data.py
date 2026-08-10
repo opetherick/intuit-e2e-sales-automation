@@ -309,8 +309,8 @@ GENOS_IDENTITY_PAYLOAD = (
 AI_SUMMARY_CELL = "Pipeline_Meta!B1"
 
 # ── Dashboard config ───────────────────────────────────────────────────────────
-FY      = 2026
-QUARTER = 4
+FY      = 2027
+QUARTER = 1
 
 # ── product_name filter values (confirmed from Databricks W46 validation) ─────
 PRODUCT_QBO_ADVANCED   = "QuickBooks Online Advanced"
@@ -451,114 +451,12 @@ BDO_PREDICATE_SQL = (
 # roster is now the sole gate for both scope and team labeling — see
 # apply_roster_classification().
 
-# ── W46 expected values per table type ────────────────────────────────────────
-W46_EXPECTED = {
-    "GNS": {
-        "National Sales CA L3":       57,
-        "Large Firms Sales CA L3":    250,   # dashboard "Major" row
-        "Regional Firms Sales CA L3": 247,   # dashboard "Large" row
-        "DTM Sales CA L3":            163,
-    },
-    "PAYROLL": {
-        "National Sales CA L3":       14,   # W48 confirmed
-        "Large Firms Sales CA L3":    72,   # Large Firms = Major row
-        "Regional Firms Sales CA L3": 43,   # Regional Firms = Large row
-        "DTM Sales CA L3":            26,
-    },
-    "ADV": {
-        "National Sales CA L3":       7,    # W46 dashboard confirmed
-        "Large Firms Sales CA L3":    22,   # Large Firms = Major row
-        "Regional Firms Sales CA L3": 16,   # Regional Firms = Large row
-        "DTM Sales CA L3":            10,
-    },
-    "ADV_GNS": {
-        "National Sales CA L3":       7,    # same filters as ADV
-        "Large Firms Sales CA L3":    22,
-        "Regional Firms Sales CA L3": 16,
-        "DTM Sales CA L3":            10,
-    },
-    "ADV_UPGRADES": {
-        "National Sales CA L3":       25,   # W48 confirmed
-        "Large Firms Sales CA L3":    43,   # Large Firms = Major row (dashboard Large=43 after swap)
-        "Regional Firms Sales CA L3": 39,   # Regional Firms = Large row (dashboard Major=39 after swap)
-        "DTM Sales CA L3":            14,   # W48 confirmed
-    },
-    # PKG W48 expected — update these once W48 data is pulled and confirmed
-    # All PKG rows show 0 at W46/W48 in dashboard (data not yet updated)
-    # Uncomment and fill once confirmed:
-    # "PKG_DTM":     { "National Sales CA L3": 0, "Large Firms Sales CA L3": 0, "Regional Firms Sales CA L3": 0, "DTM Sales CA L3": 0 },
-    # "PKG_DTM_ADV": { "National Sales CA L3": 0, "Large Firms Sales CA L3": 0, "Regional Firms Sales CA L3": 0, "DTM Sales CA L3": 0 },
-    # "PKG_DTM_ESS": { "National Sales CA L3": 0, "Large Firms Sales CA L3": 0, "Regional Firms Sales CA L3": 0, "DTM Sales CA L3": 0 },
-    # "PKG_PA":      { "National Sales CA L3": 0, "Large Firms Sales CA L3": 0, "Regional Firms Sales CA L3": 0, "DTM Sales CA L3": 0 },
-    # "PKG_PA_ADV":  { "National Sales CA L3": 0, "Large Firms Sales CA L3": 0, "Regional Firms Sales CA L3": 0, "DTM Sales CA L3": 0 },
-    # "PKG_PA_ESS":  { "National Sales CA L3": 0, "Large Firms Sales CA L3": 0, "Regional Firms Sales CA L3": 0, "DTM Sales CA L3": 0 },
-    # "PKG_LEDGER":  { "National Sales CA L3": 0, "Large Firms Sales CA L3": 0, "Regional Firms Sales CA L3": 0, "DTM Sales CA L3": 0 },
-    # "PKG_NAM":     { "National Sales CA L3": 0, "Large Firms Sales CA L3": 0, "Regional Firms Sales CA L3": 0, "DTM Sales CA L3": 0 },
-    # "PKG_GNS_ACCOUNTANT": { ... }  # fill in once W48 confirmed against master sheet
-}
-
-# ── PAYROLL expected values for EVERY Q4 week — keyed by raw L3_Division.
-#    Source: Olivia's confirmed-correct payroll table (the dashboard's intended
-#    numbers). Row→L3 mapping is fixed from the confirmed W48 column:
-#      National row  → "National Sales CA L3"
-#      Major row     → "Regional Firms Sales CA L3"   (Regional Firms = Major)
-#      Large row     → "Large Firms Sales CA L3"       (Large Firms  = Large)
-#      DTM row       → "DTM Sales CA L3"
-#    Each value below is (National, LargeFirms, RegionalFirms, DTM) i.e. the
-#    L3 counts, already un-mapped from the dashboard rows.
-#    NOTE: the pipeline emits ACTUALS only. Trailing weeks that are still
-#    FORECAST on the dashboard (no source data yet — as of now, roughly W51+)
-#    will legitimately mismatch here; that's not a pipeline bug, it just means
-#    those dashboard cells aren't pipeline-fed. Focus on the actual weeks.
-_PAYROLL_L3_ORDER = (
-    "National Sales CA L3",
-    "Large Firms Sales CA L3",
-    "Regional Firms Sales CA L3",
-    "DTM Sales CA L3",
-)
-PAYROLL_WEEKLY_EXPECTED = {
-    week: dict(zip(_PAYROLL_L3_ORDER, counts))
-    for week, counts in {
-        40: (3, 10, 18, 7),
-        41: (10, 73, 75, 29),
-        42: (14, 76, 66, 33),
-        43: (10, 56, 40, 24),
-        44: (12, 63, 72, 21),
-        45: (16, 84, 62, 32),
-        46: (18, 73, 59, 46),
-        47: (7, 59, 61, 33),
-        48: (14, 72, 43, 26),
-        49: (12, 59, 40, 31),
-        50: (16, 67, 72, 23),
-        51: (16, 67, 71, 23),
-        52: (16, 67, 71, 23),
-        53: (13, 58, 61, 20),
-    }.items()
-}
-
-# ── W45 expected values for ACTIVE_CANCELS — keyed by DASHBOARD LABEL.
-#    These are Stephen's Qlik-sourced numbers (the actual ground truth,
-#    confirmed directly from him), NOT the numbers from a later screenshot
-#    of this same dashboard tab — that later screenshot was circular (it was
-#    displaying whatever fetch_data.py had already written into Raw_Data,
-#    so of course it matched the query's own output).
-W45_ACTIVE_CANCELS_EXPECTED = {
-    "National": 18,
-    "Major":    73,
-    "Large":   106,
-    "DTM":      14,
-    "Growth":   71,
-    "NBAM":      5,
-    "Unmanaged": 72,
-}
-# NOTE (v21): the W45 numbers above are unverified against a real Stephen
-# export — we only ever had his W48 export. They may be stale. We deliberately
-# do NOT hardcode a W48 expected dict here: the only non-circular W48 ground
-# truth is Stephen's actual export, and validating against dashboard cells that
-# a prior pipeline run may have written would just confirm our own output.
-# W48 is instead validated per-account AND per-bucket by trace_active_cancels.py,
-# which reads his export as the target. If/when Stephen confirms a week's Qlik
-# totals directly, add them here as a new dict and validate against those.
+# ── Expected-value validation (removed) ──────────────────────────────────────
+# The hardcoded FY26 Q4 ground-truth dicts (W46_EXPECTED, PAYROLL_WEEKLY_EXPECTED,
+# W45_ACTIVE_CANCELS_EXPECTED) were removed when the pipeline rolled to FY27 Q1.
+# Those weeks (40–53) no longer exist in an FY27 Q1 pull, so every check reported
+# a spurious "got 0, want N". If/when Stephen or Olivia confirm FY27 ground-truth
+# totals for a given week, add a new dict here and re-wire validate() in main().
 
 
 # ── SQL template ───────────────────────────────────────────────────────────────
@@ -2188,38 +2086,12 @@ def main():
     combined = pd.concat(all_frames, ignore_index=True)
     log.info("Total rows: %d", len(combined))
 
-    # Run validation on the combined frame.
-    # Most table types validate against W46_EXPECTED at week 48, keyed by raw
-    # L3_Division. ACTIVE_CANCELS validates against W45_ACTIVE_CANCELS_EXPECTED
-    # at week 45 — no l3_map needed anymore, since apply_roster_classification()
-    # already wrote the final dashboard label directly into L3_Division.
-    for q in QUERIES:
-        table_type = q["table_type"]
-        if table_type == "ACTIVE_CANCELS":
-            validate(
-                combined, table_type,
-                week=45,
-                expected=W45_ACTIVE_CANCELS_EXPECTED,
-            )
-        elif table_type == "PAYROLL":
-            # Per-week check against Olivia's confirmed-correct table, so a
-            # pipeline miss (Raw_Data wrong at week W) is distinguishable from a
-            # dashboard-cell problem (Raw_Data right, dashboard shows forecast).
-            log.info("PAYROLL per-week validation (actual weeks should match; "
-                     "trailing forecast weeks may not — those cells aren't "
-                     "pipeline-fed):")
-            for wk in sorted(PAYROLL_WEEKLY_EXPECTED):
-                validate(
-                    combined, table_type,
-                    week=wk,
-                    expected=PAYROLL_WEEKLY_EXPECTED[wk],
-                )
-        else:
-            validate(
-                combined, table_type,
-                week=48,
-                expected=W46_EXPECTED.get(table_type),
-            )
+    # Expected-value validation against FY26 Q4 ground truth was removed on the
+    # FY27 Q1 rollover (see note where the *_EXPECTED dicts used to live). The
+    # combined frame is written straight to Sheets; sanity-check by eyeballing the
+    # per-table row counts logged above and the dashboard after the run.
+    for tt in sorted(combined["table_type"].unique()):
+        log.info("  %-22s %d rows", tt, int((combined["table_type"] == tt).sum()))
 
     # Write to Sheets
     clear_and_write(service, TAB_NAME, combined)

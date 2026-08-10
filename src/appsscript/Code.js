@@ -24,6 +24,18 @@
 //   de-duped populateGrid_, Q3 QTD col map.)
 // ============================================================
 
+// ────────────────────────────────────────────────────────────────────────────
+//  QUARTERLY / YEARLY ROLLOVER — what to change here (full walkthrough:
+//  docs/E2E_AUTOMATION.md §12). Nothing below follows a rollover automatically:
+//   • CURRENT_WEEK / CURRENT_WEEK_NUM — reset to the new quarter's first week.
+//   • QUARTER_CONFIG — add an entry for the new quarter (weeks / spreadsheetId /
+//     tabName) and point the run at it.
+//  Also update, in the other files:
+//   • fetch_data.py         → FY / QUARTER
+//   • Full_Formula_Generator.gs → DASHBOARD_TAB, VISUALS_TAB
+//  NOTE: fiscal week numbers reset every fiscal year (Q1≈W1–13, Q2≈W14–26,
+//  Q3≈W27–39, Q4≈W40–53), so a new quarter's weeks differ from last quarter's.
+// ────────────────────────────────────────────────────────────────────────────
 const CURRENT_WEEK     = 'W52';  // ← Change each week
 const CURRENT_WEEK_NUM = 52;     // ← Change each week (numeric)
 

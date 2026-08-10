@@ -192,7 +192,7 @@ GenOS config (in `fetch_data.py`): `GENOS_ENDPOINT` (Claude Sonnet via GenOS E2E
 - `TAB_NAME = "Raw_Data"`, `PIPELINE_META_TAB`, `CALENDAR_CACHE_TAB`,
   `ACTIVE_CANCELS_FREEZE_TAB`.
 - `AI_SUMMARY_CELL = "Pipeline_Meta!B1"` — **the cell `Code.js` reads.**
-- `FY = 2026`, `QUARTER = 4` — bump these on quarter rollover.
+- `FY = 2027`, `QUARTER = 1` — bump these on quarter rollover (see §12).
 - `AWS_REGION`, `S3_STAGING_DIR`, `ATHENA_WORKGROUP = "longtail"`.
 
 ### `Raw_Data` schema (the contract with Apps Script)
@@ -254,10 +254,14 @@ know the current fiscal week and to relabel weeks on quarter rollover.
 | `B1` | `write_ai_summary()` | `Code.js:readPipelineAISummary_()` | The GenOS exec summary (TLDR / Bright Spots / Hot Spots) |
 
 ### Validation
-`validate()` compares live counts to hard-coded known-good numbers
-(`W46_EXPECTED`, `PAYROLL_WEEKLY_EXPECTED`, `W45_ACTIVE_CANCELS_EXPECTED`). These
-are guard rails, not gates — a mismatch logs `⚠️` and the run continues. Trailing
-forecast-only weeks legitimately mismatch (those cells aren't pipeline-fed yet).
+The hard-coded FY26 Q4 expected-value dicts (`W46_EXPECTED`,
+`PAYROLL_WEEKLY_EXPECTED`, `W45_ACTIVE_CANCELS_EXPECTED`) were **removed on the
+FY27 Q1 rollover** — those weeks (40–53) no longer exist in an FY27 Q1 pull, so
+every check reported a spurious `got 0, want N`. The run now just logs a per-
+`table_type` row-count summary as a sanity check. The generic `validate()` helper
+remains in place; if Stephen/Olivia confirm FY27 ground-truth totals for a week,
+add a new dict and re-wire `validate()` in `main()`. (See §12 on the fiscal-week
+reset for why expected values must be re-created each quarter.)
 
 ---
 
@@ -379,6 +383,7 @@ VPN-connected laptop.
 | GenOS step logs a 401/403 warning, `B1` not updated | `GENOS_APP_SECRET` not exported, off-VPN, or downstream **Identity API (Private)** not enabled | Export the secret, connect VPN, enable the downstream service identity API |
 | Deck TLDR is generic, not the AI summary | `Pipeline_Meta!B1` empty (GenOS step skipped/failed) | Fix the GenOS step; deck correctly falls back to the template until then |
 | A week "shows nothing" on the dashboard | Missing week header label (e.g. blank `W52`) | v20 interpolates a single interior gap, but **restore the real header label** — totals/section headers reference that cell |
+| **Whole tab won't update from `Raw_Data`** (all cells stay forecast/blue) | Week-header row uses a label the parser doesn't recognize, so `getSheetWeekNumbers` falls back to the contiguous `FIRST_WEEK=40` guess and builds `COUNTIFS` for weeks that aren't in `Raw_Data` | Ensure row 5 headers are `W40…`/`WK1…`. The parser now accepts an optional `K` (`/W\s*K?\s*(\d+)/i`); confirm the numbers with **What week is it?** and re-run **Generate All Formulas** |
 | Future week flipped to a wrong low "actual" | Cap landed on an old week (stale `Calendar_Cache`) | Set `CURRENT_WEEK_OVERRIDE` to the current week, or re-run the pipeline to refresh the cache; check with **What week is it?** |
 | ADV numbers stop updating past some week | Same stale-cap issue | Same fix — override or refresh `Calendar_Cache` |
 | Google Sheets 403 in the pipeline | Impersonated SA lacks edit access | Grant `ca-cbr-gcp-gdrive-sa@...` edit on the workbook |
@@ -399,23 +404,61 @@ VPN-connected laptop.
       run **Generate All Formulas**.
 - [ ] Update `CURRENT_WEEK` / `CURRENT_WEEK_NUM` in `Code.js`; run the deck.
 
-**On quarter rollover:**
-- [ ] `rolloverToNextQuarter()` on the dashboard.
-- [ ] Update `DASHBOARD_TAB` (generator), `QUARTER_CONFIG` + `CURRENT_WEEK*` (Code.js),
-      `FY`/`QUARTER` (fetch_data.py).
+**On quarter rollover (Q1→Q2→Q3→Q4) or a new fiscal year — see §12 for the full walkthrough.**
 
 **Still to do (from the project notes):**
 - [ ] **Mapping document** — a single canonical doc of every `table_type` → dashboard
       row/section → SQL filters (partially captured in §6; finish and link it).
-- [ ] Get all remaining **formulas into Google Sheets** (fill the commented-out
-      `W46_EXPECTED` PKG blocks once W48 numbers are confirmed).
 - [ ] Rotate the exposed `GENOS_APP_SECRET` (§5).
 - [ ] Longer term: deploy `relay_service` and move the pipeline to a scheduler so
       Monday runs don't depend on a laptop + VPN.
 
 ---
 
-## 12. Contacts
+## 12. Quarterly / yearly rollover — what to change
+
+When moving to a new quarter (Q1→Q2→Q3→Q4) or a new fiscal year, update these in
+order. Nothing rolls over fully automatically — the calendar drives *week
+numbers*, but the config constants and the new tab are manual.
+
+**1. `fetch_data.py` (the data pipeline)**
+- `FY` — set to the new fiscal year (e.g. `2027`). Only changes on a year rollover (after Q4).
+- `QUARTER` — set to the new quarter (`1`–`4`).
+- These two scope the whole pull; everything downstream (`Raw_Data`, `Calendar_Cache`) follows automatically.
+
+**2. Create the new dashboard tab**
+- Use the Apps Script menu **Canada Dashboard → Roll over to next quarter** (`rolloverToNextQuarter()`).
+  It clones the current tab, relabels the week headers + day-counts + the `Q` label
+  from `Calendar_Cache`, resets cells to forecast (blue), and regenerates formulas.
+- If you build the tab by hand, make sure the week-header row (row 5) is labeled for
+  that quarter's weeks. **Both `W40`/`W41…` and `WK1`/`WK2…` formats are accepted** —
+  the generator's parser matches an optional `K` (fixed after the FY27 Q1 `WK1`
+  headers silently fell back to the wrong week numbers). The labels must be present
+  and correct — the generator reads them to build the `COUNTIFS`.
+
+**3. `Full_Formula_Generator.gs` (dashboard formula generator)**
+- `DASHBOARD_TAB` — point at the new tab name (e.g. `"E2E FY27 Q2"`). Rollover reminds you but does not set it.
+- `VISUALS_TAB` — hardcoded and does **not** follow the rollover; repoint it by hand to the new quarter's visuals tab.
+- `CURRENT_WEEK_OVERRIDE` — normally leave `null` (calendar-driven). Only set a week number if `Calendar_Cache` is stale.
+
+**4. `Code.js` (deck generator)**
+- `CURRENT_WEEK` / `CURRENT_WEEK_NUM` — the weekly knobs; reset for the new quarter's first week.
+- `QUARTER_CONFIG` — add an entry for the new quarter (its `weeks`, `spreadsheetId`, `tabName`), and point the run at it.
+
+**5. Sanity checks after the first run of the new quarter**
+- Run the pipeline, then in Apps Script run **What week is it?** (`whatWeekIsIt()`) to confirm the calendar reports the expected FY/Q/week.
+- Run **Generate All Formulas** and confirm completed weeks flip to actual (black) and future weeks stay forecast (blue).
+
+> **Fiscal week numbers reset every fiscal year.** `week_for_year_fy` runs 1–53
+> across the FY, so the quarters are roughly **Q1 = W1–13, Q2 = W14–26,
+> Q3 = W27–39, Q4 = W40–53.** This is why a new quarter's `Raw_Data` weeks won't
+> match the previous quarter's, and why any hardcoded expected-value checks (like
+> the old FY26 validation dicts, now removed) must be re-created with the new
+> quarter's weeks if you want validation back.
+
+---
+
+## 13. Contacts
 
 | Area | Who |
 |------|-----|

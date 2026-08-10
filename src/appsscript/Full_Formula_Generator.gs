@@ -60,7 +60,17 @@
  * actual = black (#000000). As a week completes, its cells flip blue -> black.
  */
 
-const DASHBOARD_TAB = "E2E FY26 Q4";
+// ── QUARTERLY / YEARLY ROLLOVER — what to change (full walkthrough:
+//    docs/E2E_AUTOMATION.md §12). Use the "Roll over to next quarter" menu item
+//    to clone + relabel the tab, then:
+//      • DASHBOARD_TAB  → the new tab name (e.g. "E2E FY27 Q2").
+//      • VISUALS_TAB    → the new quarter's visuals tab (hardcoded; does NOT
+//                         follow the rollover — repoint by hand).
+//      • CURRENT_WEEK_OVERRIDE → keep null (calendar-driven) unless the cache is stale.
+//    Also: fetch_data.py FY/QUARTER, and Code.js CURRENT_WEEK*/QUARTER_CONFIG.
+//    Week numbers reset each fiscal year (Q1≈W1–13 … Q4≈W40–53). Header labels
+//    may be "W40…" or "WK1…"; getSheetWeekNumbers parses both.
+const DASHBOARD_TAB = "E2E FY27 Q1";
 const RAW_DATA_TAB  = "Raw_Data";
 
 const COL_WEEK = "C";
@@ -532,7 +542,7 @@ function relabelWeekHeaders(sheet, weeks, quarterNum) {
   // Find every header row: a row whose column C looks like "W<number>...".
   for (let row = 1; row <= lastRow; row++) {
     const c = String(sheet.getRange(row, WEEK_START_COL).getValue()).trim();
-    if (!/^W\s*\d+/i.test(c)) continue;
+    if (!/^W\s*K?\s*\d+/i.test(c)) continue;
 
     const isPrimary = row === PRIMARY_HEADER_ROW;
     const labels = new Array(NUM_WEEKS).fill("");
@@ -616,7 +626,13 @@ function buildActiveCancelsFormula(weekNum, matchList) {
 // ── WEEK-NUMBER + FISCAL HELPERS ────────────────────────────────────────────
 
 // Read the actual week numbers from the tab's primary header row.
-// "W40 May 1-2" -> 40, "W41" -> 41, blank -> null.
+// "W40 May 1-2" -> 40, "W41" -> 41, "WK1" -> 1, blank -> null.
+// The regex accepts an optional "K" (and surrounding spaces) so both the Q4-style
+// "W40" labels and the FY27 Q1-style "WK1"…"WK14" labels parse to a plain number.
+// Without this, a "WK1" header failed to match, getSheetWeekNumbers returned all
+// null, and the generator fell back to the contiguous FIRST_WEEK (40) guess —
+// building COUNTIFS for weeks 40-53 that no longer exist in Raw_Data (which now
+// holds weeks 1-13), so every cell stayed forecast and nothing updated.
 // v20: if a single column is blank but sits between two known weeks that differ
 // by exactly 2 (e.g. W51 _ W53), fill the gap (52). This makes a missing header
 // label (the "W52 shows nothing" bug) not silently drop the whole week. Only a
@@ -625,7 +641,7 @@ function buildActiveCancelsFormula(weekNum, matchList) {
 function getSheetWeekNumbers(dashSheet) {
   const row = dashSheet.getRange(PRIMARY_HEADER_ROW, WEEK_START_COL, 1, NUM_WEEKS).getValues()[0];
   const nums = row.map(v => {
-    const m = String(v).match(/W\s*(\d+)/i);
+    const m = String(v).match(/W\s*K?\s*(\d+)/i);
     return m ? parseInt(m[1], 10) : null;
   });
   if (nums.every(n => n == null)) {
