@@ -26,23 +26,60 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 //  QUARTERLY / YEARLY ROLLOVER — what to change here (full walkthrough:
-//  docs/E2E_AUTOMATION.md §12). Nothing below follows a rollover automatically:
-//   • CURRENT_WEEK / CURRENT_WEEK_NUM — reset to the new quarter's first week.
+//  docs/E2E_AUTOMATION.md §12). Nothing below follows a rollover automatically.
+//
+//  EVERY QUARTER:
+//   • CURRENT_WEEK / CURRENT_WEEK_NUM — set to the week you're REPORTING (the
+//     last completed week, e.g. W2 while W3 is in progress).
 //   • QUARTER_CONFIG — add an entry for the new quarter (weeks / spreadsheetId /
-//     tabName) and point the run at it.
+//     tabName) if it doesn't exist yet.
+//   • VISUALS_TAB_NAME — point at the new quarter's visuals tab.
+//
+//  EVERY FISCAL YEAR (Q1) — additionally:
+//   • FY_LABEL — the fiscal-year prefix on the tab's SECTION headers
+//     ("FY27 Q1 GNS", "FY27 Q1 Payroll", …). One change here re-points ~10
+//     current-quarter section lookups instead of editing them individually.
+//   • FY_WEEK1_MONDAY — the Monday of fiscal W1 (used only by the automation's
+//     auto-week fallback; the deck itself uses CURRENT_WEEK).
+//   • PREV_FY_LABEL / PREV_QUARTER — the "previous quarter" comparison block
+//     shown next to the current quarter (slides 8/9/13). For a Q1 deck this is
+//     the PRIOR FY's Q4 (FY26 Q4). These drive BOTH the source-tab lookups AND
+//     the Slides template title matchers, so they stay in sync only if you also
+//     relabel the template's comparison headers to match. IMPORTANT: the current
+//     tab must actually CONTAIN that comparison block with data. See docs §12.
+//
 //  Also update, in the other files:
-//   • fetch_data.py         → FY / QUARTER
+//   • fetch_data.py             → FY / QUARTER
 //   • Full_Formula_Generator.gs → DASHBOARD_TAB, VISUALS_TAB
-//  NOTE: fiscal week numbers reset every fiscal year (Q1≈W1–13, Q2≈W14–26,
+//
+//  NOTE: fiscal week numbers reset every fiscal year (Q1≈W1–13/14, Q2≈W14–26,
 //  Q3≈W27–39, Q4≈W40–53), so a new quarter's weeks differ from last quarter's.
+//  FY27+ dashboards label week columns "WK1".."WK14"; the sheet-reading helpers
+//  normalize "WKn"/"Wn" so both styles resolve (see wkNorm_).
 // ────────────────────────────────────────────────────────────────────────────
-const CURRENT_WEEK     = 'W52';  // ← Change each week
-const CURRENT_WEEK_NUM = 52;     // ← Change each week (numeric)
+const CURRENT_WEEK     = 'W2';  // ← Change each week (week being reported)
+const CURRENT_WEEK_NUM = 2;     // ← Change each week (numeric)
+
+// Fiscal-year prefix on the E2E tab's section headers. Change on a Q1 rollover.
+const FY_LABEL = 'FY27';
+
+// Prior-period (comparison) block labels shown NEXT TO the current quarter. For
+// a Q1 deck the "previous quarter" is the PRIOR fiscal year's Q4. These must
+// match BOTH (a) the comparison-section titles on the source E2E tab and (b) the
+// matching section titles on the Slides template. Change on every rollover:
+//   Q1 → PREV = prior-FY Q4 | Q2 → Q1 | Q3 → Q2 | Q4 → Q3 (same FY).
+const PREV_FY_LABEL = 'FY26';
+const PREV_QUARTER  = 'Q4';
 
 const SOURCE_PRESENTATION_ID = '1AJdrGTUsYB--hrdapqalqLxgB3YU8Z7-27hI537oN7A';
 const DESTINATION_FOLDER_ID  = null;
 
 const QUARTER_CONFIG = {
+  Q1: {
+    weeks: ['W1','W2','W3','W4','W5','W6','W7','W8','W9','W10','W11','W12','W13','W14'],
+    spreadsheetId: '1BSs8I9NXBH8r-NqAaoDP08B_AnrgYU0XG5jm5ZN0K6U',
+    tabName: 'E2E FY27 Q1',
+  },
   Q3: {
     weeks: ['W27','W28','W29','W30','W31','W32','W33','W34','W35','W36','W37','W38','W39','W40'],
     spreadsheetId: '1BSs8I9NXBH8r-NqAaoDP08B_AnrgYU0XG5jm5ZN0K6U',
@@ -68,13 +105,19 @@ const PIPELINE_META_RANGE     = 'Pipeline_Meta!A1';
 // call always 403s. The pipeline already generated the summary on-network.
 const AI_SUMMARY_RANGE        = 'Pipeline_Meta!B1';
 
-// FY26 starts Monday 4 Aug 2025 — used to auto-calculate the current fiscal week.
-const FY_WEEK1_MONDAY = new Date('2025-08-04T00:00:00');
+// Monday of fiscal W1 — used ONLY by the automation's auto-week fallback
+// (getCurrentWeekNumber_); the deck content uses CURRENT_WEEK. Update on a Q1
+// rollover. FY26 W1 = 4 Aug 2025; FY27 W1 = 3 Aug 2026. VERIFY against
+// Calendar_Cache if the calendar's W1 differs from the first Monday of August.
+const FY_WEEK1_MONDAY = new Date('2026-08-03T00:00:00');
 
-// ── FY26Q4 Visuals week-driver cell (CHANGE A) ──────────────
+// ── Visuals week-driver cell (CHANGE A) ─────────────────────
 // The visuals lookup table keys off this cell. We bump it to the current week
 // and flush before reading the tab so the pulled values are for this week.
-const VISUALS_TAB_NAME    = 'FY26Q4 Visuals';
+// ⚠ VERIFY this tab name exactly matches the FY27 Q1 visuals tab (incl. any
+// trailing space). A mismatch just no-ops with a log line — the deck still
+// runs but visuals-sourced rows (pipeline, team slides, EMM) stay blank.
+const VISUALS_TAB_NAME    = 'FY27Q1 Visuals';
 const VISUALS_WEEK_CELL   = 'F149';
 // Set to true if the visuals table matches on the "W50" string; false if it
 // matches on the bare number 50.
@@ -253,15 +296,17 @@ function debugLogSections_(allData) {
     allData = SpreadsheetApp.openById(qi.spreadsheetId)
               .getSheetByName(qi.tabName).getDataRange().getDisplayValues();
   }
+  var _cur  = FY_LABEL + ' ' + ((qi && qi.quarter) || 'Q1');
+  var _prev = PREV_FY_LABEL + ' ' + PREV_QUARTER;
   [
-    'FY26 Q4 GNS','FY26 Q3 GNS','National','Major','Large','DTM','Act/Fcst',
+    _cur + ' GNS', _prev + ' GNS','National','Major','Large','DTM','Act/Fcst',
     'ITF','Account Based ITPY',
-    'FY26 Q4 Finance Forecast','FY26 Q4 ADV','ADV GNS Mix (non-BDO)',
+    _cur + ' Finance Forecast', _cur + ' ADV','ADV GNS Mix (non-BDO)',
     'ADV GNS A','ADV ITF','Account Based ADV ITPY',
     'ADV Upgrade Events','ADV Upgrades ITF','ADV Upgrades ITPY','EMM ADV Upgrades',
-    'FY26 Q4 Payroll','Payroll Attach','Payroll GNS A','Payroll ITF','Payroll ITPY',
-    'FY26 Cancel','FY26 Q4 Active Cancels',
-    'FY26 Q4 PKG Actuals','FY26 Q3 PKG Actuals','FY26 WSB','Package % of GNS',
+    _cur + ' Payroll','Payroll Attach','Payroll GNS A','Payroll ITF','Payroll ITPY',
+    FY_LABEL + ' Cancel', _cur + ' Active Cancels',
+    _cur + ' PKG Actuals', _prev + ' PKG Actuals', FY_LABEL + ' WSB','Package % of GNS',
     'EMM Account Management',
   ].forEach(function(lbl) {
     Logger.log('ROW "' + lbl + '" → ' + (findRowLoose_(allData, lbl, 1, allData.length) || 'NOT FOUND'));
@@ -299,11 +344,11 @@ function extractAllData_(allData, visData, qi, spreadsheet) {
   var ql = qi.quarter;
 
   // ── Section anchor rows ──────────────────────────────────
-  var gnsSec     = findRowLoose_(allData, 'FY26 ' + ql + ' GNS',              1, allData.length) || 3;
-  var finSec     = findRowLoose_(allData, 'FY26 ' + ql + ' Finance Forecast',  1, allData.length);
+  var gnsSec     = findRowLoose_(allData, FY_LABEL + ' ' + ql + ' GNS',              1, allData.length) || 3;
+  var finSec     = findRowLoose_(allData, FY_LABEL + ' ' + ql + ' Finance Forecast',  1, allData.length);
   var itfSec     = findRowLoose_(allData, 'ITF',                  gnsSec + 3,  gnsSec + 120);
   var itpySec    = findRowLoose_(allData, 'Account Based ITPY',   1,           allData.length);
-  var advSec     = findRowLoose_(allData, 'FY26 ' + ql + ' ADV', 1,           allData.length);
+  var advSec     = findRowLoose_(allData, FY_LABEL + ' ' + ql + ' ADV', 1,           allData.length);
   var advMixSec  = findRowLoose_(allData, 'ADV GNS Mix (non-BDO)',1,           allData.length);
   var advGnsA    = findRowLoose_(allData, 'ADV GNS A',            1,           allData.length);
   var advItfSec  = advGnsA
@@ -314,21 +359,28 @@ function extractAllData_(allData, visData, qi, spreadsheet) {
   var upgrItfSec = findRowLoose_(allData, 'ADV Upgrades ITF',     1,           allData.length);
   var upgrItpySec= findRowLoose_(allData, 'ADV Upgrades ITPY',    1,           allData.length);
   var emmSec     = findRowLoose_(allData, 'EMM ADV Upgrades',     1,           allData.length);
-  var paySec     = findRowLoose_(allData, 'FY26 ' + ql + ' Payroll', 1,        allData.length);
+  var paySec     = findRowLoose_(allData, FY_LABEL + ' ' + ql + ' Payroll', 1,        allData.length);
   var payAttSec  = findRowLoose_(allData, 'Payroll Attach',       1,           allData.length);
   var payGnsA    = findRowLoose_(allData, 'Payroll GNS A',        1,           allData.length);
   var payItfSec  = findRowLoose_(allData, 'Payroll ITF',          1,           allData.length);
   var payItpySec = findRowLoose_(allData, 'Payroll ITPY',         1,           allData.length);
-  var canSec     = findRowLoose_(allData, 'FY26 Cancel',          1,           allData.length);
-  var q4CanSec   = findRowLoose_(allData, 'FY26 Q4 Active Cancels',1,          allData.length);
-  var q3CanSec   = findRowLoose_(allData, 'FY26 Q3 Active Cancels',1,          allData.length)
+  // Current-quarter / current-FY sections: driven by FY_LABEL + ql so a rollover
+  // is a one-line change. (Variable names keep the historical "q4" for minimal
+  // downstream churn — they hold the CURRENT quarter's rows, not literally Q4.)
+  var canSec     = findRowLoose_(allData, FY_LABEL + ' Cancel',              1, allData.length);
+  var q4CanSec   = findRowLoose_(allData, FY_LABEL + ' ' + ql + ' Active Cancels', 1, allData.length);
+  var pkgQ4Sec   = findRowLoose_(allData, FY_LABEL + ' ' + ql + ' PKG Actuals',    1, allData.length);
+  var wsbSec     = findRowLoose_(allData, FY_LABEL + ' WSB',                 1, allData.length);
+  // PRIOR-PERIOD comparison anchors, driven by PREV_FY_LABEL / PREV_QUARTER.
+  // For a Q1 deck these resolve to "FY26 Q4 ..." (the prior FY's Q4). NOTE: they
+  // search the CURRENT tab, so the FY27 Q1 tab must actually CONTAIN a FY26 Q4
+  // comparison block with data. Legacy FY25 fallbacks are kept last.
+  var q3CanSec   = findRowLoose_(allData, PREV_FY_LABEL + ' ' + PREV_QUARTER + ' Active Cancels', 1, allData.length)
                  || findRowLoose_(allData, 'FY25 Cancel Type',    1,           allData.length);
-  var pkgQ4Sec   = findRowLoose_(allData, 'FY26 Q4 PKG Actuals',  1,           allData.length);
-  var pkgQ3Sec   = findRowLoose_(allData, 'FY26 Q3 PKG Actuals',  1,           allData.length);
-  var wsbSec     = findRowLoose_(allData, 'FY26 WSB',             1,           allData.length);
+  var pkgQ3Sec   = findRowLoose_(allData, PREV_FY_LABEL + ' ' + PREV_QUARTER + ' PKG Actuals',    1, allData.length);
   var pkgPctSec  = findRowLoose_(allData, 'Package % of GNS',     1,           allData.length)
                  || findRowLoose_(allData, 'Package %',           1,           allData.length);
-  var pkg9Sec    = findRowLoose_(allData, 'FY25 Q4 Package GNS',  1,           allData.length)
+  var pkg9Sec    = findRowLoose_(allData, PREV_FY_LABEL + ' ' + PREV_QUARTER + ' Package GNS',    1, allData.length)
                  || pkgQ4Sec || pkgQ3Sec;
 
   var visSec = findRowLoose_(visData, 'Pipeline (TOTAL', 1, allData.length);
@@ -386,7 +438,7 @@ function extractAllData_(allData, visData, qi, spreadsheet) {
   var dtmAdv  = advSec ? findRowLoose_(allData, 'DTM',           advSec, advEnd) : null;
   var totAdv  = advSec ? findRowLoose_(allData, 'Total ADV GNS', advSec, advEnd + 10) : null;
 
-  var advFcstSec = findRowLoose_(allData, 'FY26 ' + ql + ' ADV Forecast', 1, allData.length);
+  var advFcstSec = findRowLoose_(allData, FY_LABEL + ' ' + ql + ' ADV Forecast', 1, allData.length);
   var advFcstRow = advFcstSec
     ? findRowLoose_(allData, 'Advanced GNS', advFcstSec, advFcstSec + 10)
     : null;
@@ -408,7 +460,7 @@ function extractAllData_(allData, visData, qi, spreadsheet) {
   var hvamRow     = upgrSec
     ? findRowLoose_(allData, 'Total Upgrades', upgrSec, upgrEnd)
     : null;
-  var upgrFcstSec = findRowLoose_(allData, 'FY26 ' + ql + ' ADV UPGRADES Forecast', 1, allData.length);
+  var upgrFcstSec = findRowLoose_(allData, FY_LABEL + ' ' + ql + ' ADV UPGRADES Forecast', 1, allData.length);
   var hvamFcstRow = upgrFcstSec
     ? findRowLoose_(allData, 'ADV Upgrades', upgrFcstSec, upgrFcstSec + 10)
     : null;
@@ -430,7 +482,7 @@ function extractAllData_(allData, visData, qi, spreadsheet) {
     ? findRowLoose_(allData, 'Actual/Sales Fcst', paySec, payEnd)
     || findRowLoose_(allData, 'Partner',           paySec, payEnd)
     : null;
-  var payFcstSec = findRowLoose_(allData, 'FY26 ' + ql + ' Payroll Forecast', 1, allData.length);
+  var payFcstSec = findRowLoose_(allData, FY_LABEL + ' ' + ql + ' Payroll Forecast', 1, allData.length);
   var payFcstRow = payFcstSec
     ? findRowLoose_(allData, 'Partner', payFcstSec, payFcstSec + 10)
     : null;
@@ -643,21 +695,27 @@ function extractAllData_(allData, visData, qi, spreadsheet) {
   Logger.log('=== Slide 8 debug ===');
   Logger.log('pkgQ4Sec=' + pkgQ4Sec + ' wsbSec=' + wsbSec + ' pkgQ3Sec=' + pkgQ3Sec);
 
-  var pkgQ4WkCols = QUARTER_CONFIG[ql].weeks.concat(['Q4', 'QTD']);
-  var pkgQ3WkCols = QUARTER_CONFIG['Q3']
-    ? QUARTER_CONFIG['Q3'].weeks.concat(['Q3', 'QTD'])
-    : ['W27','W28','W29','W30','W31','W32','W33','W34','W35','W36','W37','W38','W39','W40','Q3','QTD'];
+  // Current-quarter package cols: weeks + the quarter-total label (ql) + QTD.
+  var pkgQ4WkCols = QUARTER_CONFIG[ql].weeks.concat([ql, 'QTD']);
+  // Prior-quarter package cols, driven by PREV_QUARTER (FY26 Q4 for a Q1 deck).
+  var pkgQ3WkCols = QUARTER_CONFIG[PREV_QUARTER]
+    ? QUARTER_CONFIG[PREV_QUARTER].weeks.concat([PREV_QUARTER, 'QTD'])
+    : ['W40','W41','W42','W43','W44','W45','W46','W47','W48','W49','W50','W51','W52','W53','Q4','QTD'];
 
-  var WSB_COL_OFFSETS = {
-    W40:2,  W41:3,  W42:4,  W43:5,  W44:6,  W45:7,
-    W46:8,  W47:9,  W48:10, W49:11, W50:12, W51:13,
-    W52:14, W53:15, Q4:16,  QTD:18
-  };
+  // WSB row column offsets, derived from the layout rather than hardcoded to
+  // W40..W53 (which blanked WSB on any non-Q4 tab). Weeks sit in columns C..P
+  // (0-based offsets 2..15), the quarter total follows the weeks, then a spacer,
+  // then QTD — matching the Q4 layout (total=16, QTD=18 for 14 weeks).
+  var WSB_COL_OFFSETS = {};
+  QUARTER_CONFIG[ql].weeks.forEach(function(w, i) { WSB_COL_OFFSETS[w] = i + 2; });
+  var _wsbTotalOff = 2 + QUARTER_CONFIG[ql].weeks.length;
+  WSB_COL_OFFSETS[ql]    = _wsbTotalOff;       // quarter-total column (e.g. "Q1")
+  WSB_COL_OFFSETS['QTD'] = _wsbTotalOff + 2;   // QTD (one spacer column skipped)
   var wsbCols = pkgQ4WkCols;
-  var wsbDataRows = ['FY26 WSB', 'FY25', 'ITPY'].map(function(label) {
-    var rowNum = (label === 'FY26 WSB') ? wsbSec
-               : (label === 'FY25')    ? wsbSec + 1
-               :                         wsbSec + 2;
+  var wsbDataRows = [FY_LABEL + ' WSB', PREV_FY_LABEL, 'ITPY'].map(function(label) {
+    var rowNum = (label === FY_LABEL + ' WSB') ? wsbSec
+               : (label === PREV_FY_LABEL)     ? wsbSec + 1
+               :                                 wsbSec + 2;
     var row = allData[rowNum - 1];
     if (!row) return { values: wsbCols.map(function() { return ''; }) };
     return { values: wsbCols.map(function(wk) {
@@ -1545,7 +1603,7 @@ function updateSlide6_(pres, rootData) {
   for (var c = 0; c < numCols; c++) {
     try {
       var cell = t.getCell(1, c).getText().asString().trim();
-      if (cell) colIndex[cell.replace(/\s+/g,'').toLowerCase()] = c;
+      if (cell) colIndex[wkNorm_(cell)] = c;
     } catch(e) {}
   }
   Logger.log('Slide 6 colIndex: ' + JSON.stringify(colIndex));
@@ -1565,7 +1623,7 @@ function updateSlide6_(pres, rootData) {
   };
 
   function resolveCol(wkLabel) {
-    var sl = wkLabel.replace(/\s+/g,'').toLowerCase();
+    var sl = wkNorm_(wkLabel);
     if (colIndex[sl] !== undefined) return colIndex[sl];
     var weekMatch = sl.match(/^w(\d+)/);
     if (weekMatch) {
@@ -1613,6 +1671,7 @@ function updateSlide8_(pres, rootData) {
   var slide = getSlideByTitle_(pres, 'Offer Tracking') || pres.getSlides()[7];
   if (!slide || !rootData.slide8) return;
   var d = rootData.slide8;
+  var ql = (rootData.meta && rootData.meta.quarter) || 'Q1';
 
   var tables = slide.getTables();
   Logger.log('Slide 8: total tables = ' + tables.length);
@@ -1641,7 +1700,7 @@ function updateSlide8_(pres, rootData) {
       for (var c = 0; c < Math.min(tbl.getNumColumns(), 6); c++) {
         try {
           var txt = tbl.getCell(r, c).getText().asString().trim();
-          if (txt.indexOf('FY26 Q4 PKG') >= 0) { mainTable = tbl; break outer; }
+          if (txt.indexOf(FY_LABEL + ' ' + ql + ' PKG') >= 0) { mainTable = tbl; break outer; }
         } catch(e) {}
       }
     }
@@ -1660,8 +1719,7 @@ function updateSlide8_(pres, rootData) {
   for (var r = 0; r < Math.min(3, mainTable.getNumRows()); r++) {
     for (var c = 0; c < numCols; c++) {
       try {
-        var cell = mainTable.getCell(r, c).getText().asString().trim()
-                    .replace(/\s+/g,'').toLowerCase();
+        var cell = wkNorm_(mainTable.getCell(r, c).getText().asString().trim());
         if (cell && !slideColMap[cell]) slideColMap[cell] = c;
       } catch(e) {}
     }
@@ -1669,7 +1727,7 @@ function updateSlide8_(pres, rootData) {
   Logger.log('Slide 8 colMap keys: ' + JSON.stringify(Object.keys(slideColMap)));
 
   function resolveSlideCol_(lbl) {
-    var sl = lbl.replace(/\s+/g,'').toLowerCase();
+    var sl = wkNorm_(lbl);
     if (slideColMap[sl] !== undefined) return slideColMap[sl];
     var wm = sl.match(/^w(\d+)/);
     if (wm) {
@@ -1720,10 +1778,10 @@ function updateSlide8_(pres, rootData) {
     Logger.log('Slide 8: wrote ' + extractObj.data.length + ' rows starting at ' + (sectionHeaderRow + 1));
   }
 
-  var q4HdrRow  = findSectionRow_("FY26 Q4 PKG Actuals");
-  var q3HdrRow  = findSectionRow_("FY26 Q3 PKG Actuals");
+  var q4HdrRow  = findSectionRow_(FY_LABEL + ' ' + ql + ' PKG Actuals');
+  var q3HdrRow  = findSectionRow_(PREV_FY_LABEL + ' ' + PREV_QUARTER + ' PKG Actuals');
 
-  var wsbDataRow = findSectionRow_("FY26 WSB");
+  var wsbDataRow = findSectionRow_(FY_LABEL + ' WSB');
   var wsbHdrRow  = wsbDataRow >= 1 ? wsbDataRow - 1 : wsbDataRow;
 
   Logger.log("Slide 8 section rows: q4=" + q4HdrRow + " wsb=" + wsbHdrRow + " q3=" + q3HdrRow);
@@ -1774,7 +1832,7 @@ function updateSlide9_(pres, rootData) {
   var tables = slide.getTables();
   var mainTable = null;
   for (var t = 0; t < tables.length; t++) {
-    if (tables[t].getCell(0,0).getText().asString().trim() === 'FY25 Q4 Package GNS') {
+    if (tables[t].getCell(0,0).getText().asString().trim() === PREV_FY_LABEL + ' ' + PREV_QUARTER + ' Package GNS') {
       mainTable = tables[t];
       break;
     }
@@ -1826,12 +1884,13 @@ function updateSlide10_(pres, rootData) {
   if (!slide || !rootData.slide10) return;
 
   var d = rootData.slide10;
+  var ql = (rootData.meta && rootData.meta.quarter) || 'Q1';
   var tables = slide.getTables();
 
   var t0 = null, t1 = null, t2 = null, t3 = null;
   tables.forEach(function(t) {
     var fc = t.getCell(0,0).getText().asString().trim();
-    if (fc === 'FY26 Q4 ADV')                t0 = t;
+    if (fc === FY_LABEL + ' ' + ql + ' ADV')  t0 = t;
     else if (fc === 'ADV GNS \u25b2')         t1 = t;
     else if (fc === 'ADV ITF')                t2 = t;
     else if (fc === 'Account Based ADV ITPY') t3 = t;
@@ -2088,16 +2147,20 @@ function updateSlide13_(pres, rootData) {
   if (!slide || !rootData.slide13) return;
 
   var d = rootData.slide13;
+  var ql = (rootData.meta && rootData.meta.quarter) || 'Q1';
   var tables = slide.getTables();
+  var _cancelType = FY_LABEL + ' Cancel Type';
+  var _curActive  = FY_LABEL + ' ' + ql + ' Active';
+  var _prevQ      = PREV_FY_LABEL + ' ' + PREV_QUARTER;
 
   var tCancel = null, tCancelItf = null, tQ4 = null, tQ3Avg = null;
   tables.forEach(function(t, i) {
     var fc = t.getCell(0,0).getText().asString().trim();
     Logger.log('[slide13] table[%s] firstCell="%s" rows=%s cols=%s', i, fc, t.getNumRows(), t.getNumColumns());
-    if (fc === 'FY26 Cancel Type' && !tCancel)   tCancel    = t;
-    else if (fc === 'FY26 Cancel Type')           tCancelItf = t;
-    else if (fc.indexOf('FY26 Q4 Active') >= 0)  tQ4        = t;
-    else if (fc.indexOf('FY26 Q3') >= 0 || fc === 'FY26 Q3 Avg') tQ3Avg = t;
+    if (fc === _cancelType && !tCancel)          tCancel    = t;
+    else if (fc === _cancelType)                 tCancelItf = t;
+    else if (fc.indexOf(_curActive) >= 0)        tQ4        = t;
+    else if (fc.indexOf(_prevQ) >= 0)            tQ3Avg     = t;
   });
 
   var C13 = {
@@ -2343,11 +2406,10 @@ function populateGrid_(slide, headerKeyword, extractObj) {
 
     var colMap = (labels || Object.keys(extractObj[Object.keys(extractObj)[0]] || {}))
       .map(function(lbl) {
-        var sl = lbl.replace(/\s+/g,'').toLowerCase();
+        var sl = wkNorm_(lbl);
         for (var hc = 0; hc < t.getNumColumns(); hc++) {
           try {
-            var hTxt = t.getCell(colHeaderRow, hc).getText().asString()
-                        .replace(/\s+/g,'').toLowerCase();
+            var hTxt = wkNorm_(t.getCell(colHeaderRow, hc).getText().asString());
             if (hTxt === sl) return hc;
           } catch(e) {}
         }
@@ -2355,8 +2417,7 @@ function populateGrid_(slide, headerKeyword, extractObj) {
         if (wm) {
           for (var hc = 0; hc < t.getNumColumns(); hc++) {
             try {
-              var hTxt = t.getCell(colHeaderRow, hc).getText().asString()
-                          .replace(/\s+/g,'').toLowerCase();
+              var hTxt = wkNorm_(t.getCell(colHeaderRow, hc).getText().asString());
               if (hTxt.indexOf('w' + wm[1]) === 0) return hc;
             } catch(e) {}
           }
@@ -2399,7 +2460,7 @@ function moveHighlightBox_(slide) {
   for (var r = 0; r < Math.min(4, t.getNumRows()); r++) {
     for (var c = 0; c < t.getNumColumns(); c++) {
       try {
-        if (t.getCell(r,c).getText().asString().trim() === CURRENT_WEEK) { targetCol = c; break outer; }
+        if (wkNorm_(t.getCell(r,c).getText().asString()) === wkNorm_(CURRENT_WEEK)) { targetCol = c; break outer; }
       } catch(e) {}
     }
   }
@@ -2494,7 +2555,7 @@ function applyWeekTextColours_(slide) {
       for (var hr = 0; hr < numRows; hr++) {
         var h = '';
         try { h = t.getCell(hr,c).getText().asString().trim(); } catch(e) {}
-        var m = /^w\s*0*(\d+)$/i.exec(h);
+        var m = /^w\s*k?\s*0*(\d+)$/i.exec(h);
         if (m) { colWeek[c] = parseInt(m[1], 10); break; }
       }
     }
@@ -2649,7 +2710,7 @@ function extractPkgSection_(allData, secStart, wkCols, isQ3) {
     : ['DTM (12m)', '   2 Adv', '   2 Ess',
        'PA Value (9mnths)', '   2 Adv__2', '   5 Ess',
        'Ledger', 'NAM', 'NAM BDO',
-       'FY26 PKGs', 'FY25 PKGs', 'IPTY'];
+       FY_LABEL + ' PKGs', PREV_FY_LABEL + ' PKGs', 'IPTY'];
 
   var searchEnd = secStart + (isQ3 ? 25 : 20);
   var lastFoundRow = {};
@@ -2754,15 +2815,23 @@ function setCell_(table, row, col, value) {
   } catch(e) {}
 }
 
+// FY27+ dashboards label week columns "WK1".."WK14"; older ones used "W40"..
+// Collapse whitespace/case AND fold a leading "WKn" to "Wn" so both header
+// styles compare equal. Non-week labels (QTD, Best Case, WSB…) are unaffected
+// because the fold only fires on "wk" immediately followed by a digit.
+function wkNorm_(s) {
+  return String(s).replace(/\s+/g, '').toLowerCase().replace(/^wk(?=\d)/, 'w');
+}
+
 function findColumnInRows_(allData, label, startRow, endRow) {
-  var cl = label.replace(/\s+/g,'').toLowerCase();
+  var cl = wkNorm_(label);
   var s = Math.max(0, startRow - 1);
   var e = Math.min(endRow - 1, allData.length - 1);
   for (var pass = 0; pass < 2; pass++) {
     for (var ri = s; ri <= e; ri++) {
       var row = allData[ri];
       for (var ci = 0; ci < Math.min(row.length, 120); ci++) {
-        var cell = String(row[ci]).replace(/\s+/g,'').toLowerCase();
+        var cell = wkNorm_(row[ci]);
         if (pass === 0 ? cell === cl : cell.indexOf(cl) >= 0) return ci + 1;
       }
     }
@@ -2771,13 +2840,13 @@ function findColumnInRows_(allData, label, startRow, endRow) {
 }
 
 function findColumnLoose_(allData, label) {
-  var cl = label.replace(/\s+/g,'').toLowerCase();
+  var cl = wkNorm_(label);
   var rows = Math.min(25, allData.length);
   for (var pass = 0; pass < 2; pass++) {
     for (var ri = 0; ri < rows; ri++) {
       var row = allData[ri];
       for (var ci = 0; ci < Math.min(row.length, 120); ci++) {
-        var cell = String(row[ci]).replace(/\s+/g,'').toLowerCase();
+        var cell = wkNorm_(row[ci]);
         if (pass === 0 ? cell === cl : cell.indexOf(cl) >= 0) return ci + 1;
       }
     }

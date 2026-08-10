@@ -442,8 +442,31 @@ numbers*, but the config constants and the new tab are manual.
 - `CURRENT_WEEK_OVERRIDE` — normally leave `null` (calendar-driven). Only set a week number if `Calendar_Cache` is stale.
 
 **4. `Code.js` (deck generator)**
-- `CURRENT_WEEK` / `CURRENT_WEEK_NUM` — the weekly knobs; reset for the new quarter's first week.
-- `QUARTER_CONFIG` — add an entry for the new quarter (its `weeks`, `spreadsheetId`, `tabName`), and point the run at it.
+
+_Every quarter:_
+- `CURRENT_WEEK` / `CURRENT_WEEK_NUM` — the weekly knobs; set to the week you're **reporting** (the last completed week, e.g. `W2` while `W3` is in progress).
+- `QUARTER_CONFIG` — add an entry for the new quarter (its `weeks`, `spreadsheetId`, `tabName`). The run auto-selects by matching `CURRENT_WEEK` against each entry's `weeks`.
+- `VISUALS_TAB_NAME` — repoint at the new quarter's visuals tab (the one holding the `F149` week-driver cell). A wrong name just no-ops with a log line, but visuals-sourced rows (pipeline, team slides, EMM) go blank.
+
+_Every fiscal year (Q1) — additionally:_
+- `FY_LABEL` — the fiscal-year prefix on the tab's **section headers** (`"FY27 Q1 GNS"`, `"FY27 Q1 Payroll"`, …). One change re-points ~10 current-quarter section lookups. Requires the tab's section titles to actually read `FY_LABEL + " " + quarter`.
+- `PREV_FY_LABEL` / `PREV_QUARTER` — the **previous-quarter comparison block** shown next to the current quarter (slides 8 / 9 / 13). For a Q1 deck set these to the **prior FY's Q4** (`'FY26'` / `'Q4'`). These two constants now drive **both** the source-tab lookups (`pkgQ3Sec`, `q3CanSec`, `pkg9Sec`, `pkgQ3WkCols`) **and** the Slides template title matchers on slides 8/9/10/13, so code + template stay in sync — provided you relabel the template's comparison headers to match (see below). ⚠ The current tab must actually **contain** that comparison block with data; if it doesn't, those rows go blank.
+- `FY_WEEK1_MONDAY` — Monday of fiscal W1 (FY27 = `2026-08-03`). Only used by the automation's auto-week fallback; verify against `Calendar_Cache` if the calendar's W1 differs from the first Monday of August.
+
+_Week-header styles:_ FY27+ tabs label week columns `WK1`…`WK14`; older tabs used `W40`…`W53`. The sheet-reading helpers fold `WKn`↔`Wn` via `wkNorm_()`, so both resolve. Keep `QUARTER_CONFIG` `weeks` in plain-`W` form (`['W1',…]`); `wkNorm_` handles the match to `WK` headers.
+
+_Relabeling the Slides template (`SOURCE_PRESENTATION_ID`) — one-time per rollover:_
+The template's header **text** is baked into the deck file, not the code, so open the source deck and edit the text on each slide to match the new quarter. The code now reads the current quarter from `FY_LABEL`+quarter and the comparison block from `PREV_FY_LABEL`/`PREV_QUARTER`, so relabel the template to exactly those strings:
+1. **Week-column headers** (slides 6 / 8 / 9 / 10 / 13): change the week numbers from the old quarter to the new one — e.g. `W40`…`W53` → `WK1`…`WK14`. Either `W1` or `WK1` form works (`wkNorm_` folds them), but match the dashboard's `WK` style for consistency. Tip: use **Edit → Find and replace** in Slides, replacing one token at a time (`W53`→`WK14`, `W52`→`WK13`, … working downward so no token is a prefix of another).
+2. **Current-quarter section titles**: `FY26 Q4 …` → `FY27 Q1 …` (e.g. `FY26 Q4 PKG Actuals` → `FY27 Q1 PKG Actuals`, `FY26 Q4 ADV` → `FY27 Q1 ADV`, `FY26 Q4 Active Cancels` → `FY27 Q1 Active Cancels`, `FY26 Cancel Type` → `FY27 Cancel Type`, `FY26 WSB` → `FY27 WSB`).
+3. **Previous-quarter comparison titles**: `FY26 Q3 …` → `FY26 Q4 …` and `FY25 Q4 Package GNS` → `FY26 Q4 Package GNS`, so they match `PREV_FY_LABEL`+`PREV_QUARTER`.
+4. **Quarter-total column labels**: standalone `Q4` → `Q1` in the current-quarter tables, and `Q3` → `Q4` in the comparison tables. (Do these by hand — `Q3`/`Q4` are too ambiguous for a blind find-and-replace.)
+5. After editing, run once and eyeball each slide; Slides keeps version history (**File → Version history**) if you need to revert.
+
+_Does NOT roll automatically (manual, by design):_
+- **The Slides template text** — must be relabeled by hand each rollover (steps above). The code matchers are now constant-driven, so they line up **only if** the template text matches `FY_LABEL`/`PREV_*`.
+- **Fixed row indices** (`ADV_HDR=128`, `PAY_HDR=245`, `getS9Row_(65)`, …) assume the tab was **cloned** from the previous quarter (same row layout). If the tab was rebuilt, re-verify these against the new tab.
+- **Fixed row indices** (`ADV_HDR=128`, `PAY_HDR=245`, `getS9Row_(65)`, …) assume the tab was **cloned** from the previous quarter (same row layout). If the tab was rebuilt, re-verify these against the new tab.
 
 **5. Sanity checks after the first run of the new quarter**
 - Run the pipeline, then in Apps Script run **What week is it?** (`whatWeekIsIt()`) to confirm the calendar reports the expected FY/Q/week.
