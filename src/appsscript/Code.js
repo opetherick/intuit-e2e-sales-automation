@@ -77,7 +77,7 @@ const DESTINATION_FOLDER_ID  = null;
 const QUARTER_CONFIG = {
   Q1: {
     weeks: ['W1','W2','W3','W4','W5','W6','W7','W8','W9','W10','W11','W12','W13','W14'],
-    spreadsheetId: '1BSs8I9NXBH8r-NqAaoDP08B_AnrgYU0XG5jm5ZN0K6U',
+    spreadsheetId: '1qp6eTw9nmblHi4_28zZe7gI3shbEFV_LOCl35inQL0Y',
     tabName: 'E2E FY27 Q1',
   },
   Q3: {
