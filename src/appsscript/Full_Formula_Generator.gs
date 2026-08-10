@@ -1,7 +1,32 @@
 /**
- * Full_Formula_Generator_v20.gs
+ * Full_Formula_Generator_v22.gs   (v21 + FY27 Q1 fixes)
  *
- * Changes from v19:
+ * Changes from v21:
+ *  - WK-STYLE WEEK HEADERS. getSheetWeekNumbers() and relabelWeekHeaders() now
+ *    accept BOTH "W40"-style and "WK1"-style header labels via /W\s*K?\s*(\d+)/i
+ *    (optional "K"). The FY27 Q1 tab uses "WK1".."WK14"; the old /W\s*(\d+)/i
+ *    failed to match "WK1", so getSheetWeekNumbers returned all-null, fell back
+ *    to the contiguous FIRST_WEEK=40 guess, and built COUNTIFS for weeks 40-53
+ *    — which no longer exist in Raw_Data (FY27 Q1 holds weeks 1-13). Result: the
+ *    whole tab stayed forecast/blue and nothing updated. Fixed.
+ *  - DASHBOARD_TAB repointed to "E2E FY27 Q1".
+ *  - Added a PER-QUARTER ROLLOVER checklist comment near the config block.
+ *  NOTE: VISUALS_TAB is still hardcoded to "FY26Q4 Visuals" (see the constant) —
+ *  repoint it by hand to the FY27 Q1 visuals tab. It no-ops (logs) until then.
+ *
+ * Changes from v20:
+ *  - VISUALS TAB WEEK CELL. Stamps the current fiscal week label ("W52",
+ *    "W53", …) into FY26Q4 Visuals!F149 on every run, using the SAME source of
+ *    truth as the week cap (CURRENT_WEEK_OVERRIDE wins, otherwise the
+ *    calendar). New: VISUALS_TAB / VISUALS_WEEK_CELL constants,
+ *    getCurrentWeekNumber_(), updateVisualsWeekCell_(), a call in
+ *    generateAllFormulas() after Pass 4, and a line in the final alert.
+ *    The write OVERWRITES whatever is in F149 (value or formula). It never
+ *    throws: a missing tab or an unknown week just logs and leaves the cell
+ *    alone. NOTE: VISUALS_TAB is hardcoded to Q4, so it will NOT auto-follow a
+ *    quarter rollover — repoint it by hand (or extend rolloverToNextQuarter).
+ *
+ * Changes from v19 (retained):
  *  - RESILIENT TO A MISSING WEEK-HEADER LABEL. getSheetWeekNumbers reads the
  *    week numbers from the primary header row (row 5). If a label was blank
  *    (e.g. the missing "W52"), that whole column was treated as unused and the
@@ -21,7 +46,7 @@
  * Changes from v16/v17 (retained):
  *  - ADV_GNS (130-133) + ADV_UPGRADES (169-172) generator-owned with writeZeros.
  *
- * Changes from v15 (retained in v20):
+ * Changes from v15 (retained in v21):
  *  - CURRENT-WEEK WRITE CAP (Pass 1). v15's Pass 1 wrote a COUNTIFS for EVERY
  *    week column, including weeks after the one we're currently on. A not-yet-
  *    complete week (e.g. W51 while we're on W50) whose Raw_Data already has a
@@ -92,7 +117,7 @@ const ACTUAL_COLOR   = "#000000";
 // as CURRENT_WEEK_NUM in the deck generator. Leave null to use the calendar.
 //   null  -> use the calendar (Calendar_Cache)
 //   50    -> force "actuals through W50"; W51+ stay forecast
-const CURRENT_WEEK_OVERRIDE = 52;
+const CURRENT_WEEK_OVERRIDE = null;
 
 // Layout rows on the dashboard (confirmed against the live sheet):
 const ROW3_MARKER_ROW   = 3;  // "Completed Week" x-markers
@@ -107,6 +132,16 @@ const DAYS_IN_FULL_WEEK = 7;  // a week with fewer days than this is "partial"
 // already protected; this makes it explicit. Sheet row numbers (1-based).
 // VERIFY 42 is the NAM BDO row on your tab before trusting the guard.
 const MANUAL_ROWS = [42];
+
+// ── v21: Visuals tab current-week label cell (writes "W52", "W53", …) ───────
+// F149 on the visuals tab gets stamped with the current fiscal week each run,
+// using the SAME week as the cap (CURRENT_WEEK_OVERRIDE wins, else calendar).
+// Setting this cell OVERWRITES whatever is in it (value or formula) — intended.
+// Tab name is matched EXACTLY (including any trailing space); a mismatch just
+// no-ops with a log line. VISUALS_TAB is hardcoded to Q4 and does NOT follow a
+// quarter rollover automatically — repoint it to the FY27 Q1 visuals tab.
+const VISUALS_TAB       = "FY26Q4 Visuals";
+const VISUALS_WEEK_CELL = "F149";
 
 // ── L3 / table row definitions (unchanged from v14) ─────────────────────────
 const L3_ROWS = [
@@ -361,14 +396,19 @@ function generateAllFormulas(targetSheet) {
   // flip too, and it's skipped when the cap is unreliable.
   const calFlip = flipCompletedWeeksFromCalendar(dashSheet, weekNumbers, weekCap);
 
+  // ── v21: stamp the current-week label ("W53") into the visuals tab. ───────
+  const visuals = updateVisualsWeekCell_(ss);
+
   writeAuditLog(ss, skippedDetails, writtenDetails, calFlip);
 
-  Logger.log(`✅ Done — wrote ${written}, flipped ${flipped}, preserved ${skipped}. Calendar flip: ${calFlip.note}`);
+  Logger.log(`✅ Done — wrote ${written}, flipped ${flipped}, preserved ${skipped}. Calendar flip: ${calFlip.note}. Visuals: ${visuals.note}`);
   SpreadsheetApp.getUi().alert(
     `Done on "${dashSheet.getName()}".\n` +
     `Formulas written: ${written}. Data-driven flips: ${flipped}. Still forecast: ${skipped}.\n` +
     `Week cap: ${weekCap.note}\n` +
-    `Calendar: ${calFlip.note}\nSee "Forecast Audit Log" tab.`
+    `Calendar: ${calFlip.note}\n` +
+    `Visuals week cell: ${visuals.note}\n` +
+    `See "Forecast Audit Log" tab.`
   );
 }
 
@@ -411,6 +451,47 @@ function getCurrentWeekCap_(dashSheet) {
   if (cmp > 0)  return { cap: Infinity,  reliable: true, note: `tab quarter is in the past — all weeks actual` };
   if (cmp < 0)  return { cap: -Infinity, reliable: true, note: `tab quarter is in the future (now = FY${pos.fy} Q${pos.quarter}) — no weeks actual yet` };
   return { cap: pos.week, reliable: true, note: `now = FY${pos.fy} Q${pos.quarter} W${pos.week} — actuals through W${pos.week}` };
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ *  v21 — VISUALS TAB CURRENT-WEEK LABEL
+ *  Stamps "W<week>" into VISUALS_TAB!VISUALS_WEEK_CELL using the SAME source of
+ *  truth as the cap (CURRENT_WEEK_OVERRIDE wins, otherwise the calendar).
+ * ════════════════════════════════════════════════════════════════════════ */
+// Current fiscal week as a plain number, using the SAME source of truth as the
+// cap: CURRENT_WEEK_OVERRIDE wins, otherwise the calendar. Returns week:null if
+// it genuinely can't tell (so we leave the cell alone rather than write junk).
+function getCurrentWeekNumber_() {
+  if (CURRENT_WEEK_OVERRIDE != null && CURRENT_WEEK_OVERRIDE !== "") {
+    const wk = parseInt(CURRENT_WEEK_OVERRIDE, 10);
+    if (!isNaN(wk)) return { week: wk, source: `override CURRENT_WEEK_OVERRIDE=${wk}` };
+  }
+  try {
+    const pos = getCurrentFiscalPosition(readCalendarRows());
+    if (pos) return { week: pos.week, source: `calendar FY${pos.fy} Q${pos.quarter}` };
+    return { week: null, source: "today not found in calendar" };
+  } catch (e) {
+    return { week: null, source: `calendar unavailable (${e.message})` };
+  }
+}
+
+// Stamp "W<week>" into VISUALS_TAB!VISUALS_WEEK_CELL. Never throws — a missing
+// tab or unknown week just logs and leaves the cell as-is.
+function updateVisualsWeekCell_(ss) {
+  const sheet = ss.getSheetByName(VISUALS_TAB);
+  if (!sheet) {
+    Logger.log(`⚠ Visuals tab "${VISUALS_TAB}" not found — skipping ${VISUALS_WEEK_CELL} update.`);
+    return { note: `tab "${VISUALS_TAB}" missing` };
+  }
+  const cur = getCurrentWeekNumber_();
+  if (cur.week == null) {
+    Logger.log(`⚠ Current week unknown (${cur.source}) — leaving ${VISUALS_WEEK_CELL} unchanged.`);
+    return { note: `week unknown (${cur.source})` };
+  }
+  const label = `W${cur.week}`;
+  sheet.getRange(VISUALS_WEEK_CELL).setValue(label);
+  Logger.log(`Visuals: ${VISUALS_TAB}!${VISUALS_WEEK_CELL} = ${label} (${cur.source})`);
+  return { note: `${VISUALS_TAB}!${VISUALS_WEEK_CELL} = ${label}` };
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -522,7 +603,8 @@ function rolloverToNextQuarter() {
     `W${weeks[0].week}–W${weeks[weeks.length - 1].week}).\n\n` +
     `⚠ Manual review needed:\n${relabelNotes.join("\n") || "(none flagged)"}\n\n` +
     `The DASHBOARD_TAB constant still points at "${DASHBOARD_TAB}". ` +
-    `Update it to "${nextName}" when you're ready to run the weekly generator against the new quarter.`
+    `Update it to "${nextName}" when you're ready to run the weekly generator against the new quarter.\n\n` +
+    `⚠ VISUALS_TAB is still "${VISUALS_TAB}" (hardcoded to Q4). Repoint it too if the visuals tab rolls over.`
   );
 }
 
@@ -540,6 +622,7 @@ function relabelWeekHeaders(sheet, weeks, quarterNum) {
   sheet.getRange(DAYCOUNT_ROW, WEEK_START_COL, 1, NUM_WEEKS).setValues([dayRow]);
 
   // Find every header row: a row whose column C looks like "W<number>...".
+  // v22: accept an optional "K" so "WK1"-style headers are recognized too.
   for (let row = 1; row <= lastRow; row++) {
     const c = String(sheet.getRange(row, WEEK_START_COL).getValue()).trim();
     if (!/^W\s*K?\s*\d+/i.test(c)) continue;
@@ -627,12 +710,12 @@ function buildActiveCancelsFormula(weekNum, matchList) {
 
 // Read the actual week numbers from the tab's primary header row.
 // "W40 May 1-2" -> 40, "W41" -> 41, "WK1" -> 1, blank -> null.
-// The regex accepts an optional "K" (and surrounding spaces) so both the Q4-style
-// "W40" labels and the FY27 Q1-style "WK1"…"WK14" labels parse to a plain number.
-// Without this, a "WK1" header failed to match, getSheetWeekNumbers returned all
-// null, and the generator fell back to the contiguous FIRST_WEEK (40) guess —
-// building COUNTIFS for weeks 40-53 that no longer exist in Raw_Data (which now
-// holds weeks 1-13), so every cell stayed forecast and nothing updated.
+// v22: the regex accepts an optional "K" (and surrounding spaces) so BOTH the
+// Q4-style "W40" labels and the FY27 Q1-style "WK1"…"WK14" labels parse to a
+// plain number. Without this, a "WK1" header failed to match, this function
+// returned all-null, and the generator fell back to the contiguous FIRST_WEEK
+// (40) guess — building COUNTIFS for weeks 40-53 that no longer exist in
+// Raw_Data (which now holds weeks 1-13), so every cell stayed forecast.
 // v20: if a single column is blank but sits between two known weeks that differ
 // by exactly 2 (e.g. W51 _ W53), fill the gap (52). This makes a missing header
 // label (the "W52 shows nothing" bug) not silently drop the whole week. Only a
@@ -897,10 +980,17 @@ function whatWeekIsIt() {
     ? `CURRENT_WEEK_OVERRIDE is SET to ${CURRENT_WEEK_OVERRIDE} (this wins over the calendar).`
     : "CURRENT_WEEK_OVERRIDE is null (using the calendar).";
 
+  // v21: also show what the visuals cell will get stamped with.
+  const cur = getCurrentWeekNumber_();
+  const visualsMsg = cur.week == null
+    ? `Visuals cell ${VISUALS_TAB}!${VISUALS_WEEK_CELL}: would be LEFT UNCHANGED (${cur.source}).`
+    : `Visuals cell ${VISUALS_TAB}!${VISUALS_WEEK_CELL}: would be set to "W${cur.week}" (${cur.source}).`;
+
   SpreadsheetApp.getUi().alert(
     `Tab: "${dashSheet.getName()}"\n\n` +
     `${overrideMsg}\n${calMsg}\n\n` +
     `Resulting cap: ${cap.note}\n\n` +
+    `${visualsMsg}\n\n` +
     `Weeks at or before the cap get actual formulas (black); weeks after it stay ` +
     `forecast (blue, no formula). If the cap week looks wrong, refresh Calendar_Cache ` +
     `(re-run the pipeline) or set CURRENT_WEEK_OVERRIDE at the top of this script.`
