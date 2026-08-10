@@ -1,6 +1,18 @@
 // ============================================================
 //  FY26 CA Weekly Accountant E2E — Automated Deck Generator
-//  VERSION 5
+//  VERSION 6
+//
+//  CHANGES FROM v5:
+//   C. AUTO HEADER RELABEL ON ROLLOVER. The template is the FY26 Q4 deck
+//      (headers baked as W40..W53 / "FY26 Q4 …"). Slides 9–13 write data
+//      positionally and never rewrite their header text, so the deck kept
+//      showing W41, W42…, and slides 6/8 (which match by header text) didn't
+//      populate at all. generateWeeklyPresentation now calls relabelDeckHeaders_
+//      on the fresh COPY first, rewriting week columns to the tab's WK labels
+//      and section titles to the current quarter — driven entirely by the
+//      rollover constants (FY_LABEL / PREV_* / QUARTER_CONFIG / TEMPLATE_*).
+//      No manual template editing required. To fix an already-generated deck's
+//      visible labels without a full re-run, call relabelDeckHeadersById(id).
 //
 //  CHANGES FROM v4 (FIXED):
 //   A. F149 DRIVER (NEW). Before reading the "FY26Q4 Visuals" tab we now
@@ -43,10 +55,15 @@
 //     auto-week fallback; the deck itself uses CURRENT_WEEK).
 //   • PREV_FY_LABEL / PREV_QUARTER — the "previous quarter" comparison block
 //     shown next to the current quarter (slides 8/9/13). For a Q1 deck this is
-//     the PRIOR FY's Q4 (FY26 Q4). These drive BOTH the source-tab lookups AND
-//     the Slides template title matchers, so they stay in sync only if you also
-//     relabel the template's comparison headers to match. IMPORTANT: the current
-//     tab must actually CONTAIN that comparison block with data. See docs §12.
+//     the PRIOR FY's Q4 (FY26 Q4). Drives the source-tab lookups, the slide-
+//     writer matchers, AND the auto header-relabel. IMPORTANT: the current tab
+//     must actually CONTAIN that comparison block with data. See docs §12.
+//
+//  THE SLIDES TEMPLATE IS RELABELED AUTOMATICALLY. You do NOT hand-edit the
+//  template on rollover — relabelDeckHeaders_ rewrites each generated copy's
+//  week columns (→ WK1..WK14) and section titles from the TEMPLATE_* constants
+//  below to the current quarter. Only touch the TEMPLATE_* constants if the
+//  template deck itself is rebuilt with different baseline headers.
 //
 //  Also update, in the other files:
 //   • fetch_data.py             → FY / QUARTER
@@ -70,6 +87,21 @@ const FY_LABEL = 'FY27';
 //   Q1 → PREV = prior-FY Q4 | Q2 → Q1 | Q3 → Q2 | Q4 → Q3 (same FY).
 const PREV_FY_LABEL = 'FY26';
 const PREV_QUARTER  = 'Q4';
+
+// ── Template baseline → generated-deck relabeling ────────────────────────────
+// The Slides template (SOURCE_PRESENTATION_ID) is the FY26 Q4 deck, so its
+// headers are baked in as W40..W53 / "FY26 Q4 …" / "FY26 Q3 …" / "FY25 …".
+// relabelDeckHeaders_() rewrites those onto every generated COPY (before data is
+// written) so the deck shows the current quarter's WK labels and section titles
+// line up with the writers — you never hand-edit the template on rollover.
+// FROM = the template's baked-in labels (change ONLY if the template itself is
+// rebuilt); TO is derived from the rollover constants above.
+const TEMPLATE_BASE_WEEKS = ['W40','W41','W42','W43','W44','W45','W46','W47','W48','W49','W50','W51','W52','W53'];
+const TEMPLATE_BASE_FY_Q  = 'FY26 Q4';            // current-quarter title in the template
+const TEMPLATE_PREV_FY_Q  = 'FY26 Q3';            // previous-quarter title in the template
+const TEMPLATE_PKG9_TITLE = 'FY25 Q4 Package GNS';// slide-9 prior baseline title
+const TEMPLATE_BASE_FY    = 'FY26';               // current-FY prefix in the template
+const TEMPLATE_PREV_FY    = 'FY25';               // prior-FY prefix in the template
 
 const SOURCE_PRESENTATION_ID = '1AJdrGTUsYB--hrdapqalqLxgB3YU8Z7-27hI537oN7A';
 const DESTINATION_FOLDER_ID  = null;
@@ -268,9 +300,20 @@ function generateWeeklyPresentation() {
 
   debugLogSections_(allData);
 
-  var newName   = 'FY26 CA Weekly Accountant E2E Review: Week ' + CURRENT_WEEK_NUM + ' (' + qi.quarter + ')';
+  var newName   = FY_LABEL + ' CA Weekly Accountant E2E Review: Week ' + CURRENT_WEEK_NUM + ' (' + qi.quarter + ')';
   var newFileId = copyPresentation_(newName);
   Logger.log('Created: ' + newName);
+
+  // Relabel the fresh copy's headers to the current quarter BEFORE writing data,
+  // so text-matched columns/sections line up and the deck shows WK1..WK14 (not
+  // the template's baked-in W40..W53 / FY26 Q4 labels).
+  try {
+    var prep = SlidesApp.openById(newFileId);
+    relabelDeckHeaders_(prep, qi.quarter);
+    prep.saveAndClose();
+  } catch (e) {
+    Logger.log('[relabel] deck relabel failed: ' + e);
+  }
 
   var data    = extractAllData_(allData, visData, qi, spreadsheet);
   var aiText  = generateAICommentary_(data);
@@ -777,21 +820,26 @@ function extractAllData_(allData, visData, qi, spreadsheet) {
     };
   }
 
+  // Anchor slide 9 to the "Package % of GNS" header so the block rolls with the
+  // tab instead of assuming fixed rows 65-77 from the FY26 Q4 layout. The GNS
+  // block sits 8 rows above the % block; both keep their historical offsets when
+  // pkgPctSec resolves to the same place (fallback = 73).
+  var s9Pct = pkgPctSec || 73;
   var slide9 = {
     pkgGns: {
-      namBdo:     getS9Row_(65),
-      national:   getS9Row_(66),
-      major:      getS9Row_(67),
-      large:      getS9Row_(68),
-      dtm:        getS9Row_(69),
-      accountant: getS9Row_(70)
+      namBdo:     getS9Row_(s9Pct - 8),
+      national:   getS9Row_(s9Pct - 7),
+      major:      getS9Row_(s9Pct - 6),
+      large:      getS9Row_(s9Pct - 5),
+      dtm:        getS9Row_(s9Pct - 4),
+      accountant: getS9Row_(s9Pct - 3)
     },
     pkgPercent: {
-      national:   getS9Row_(73),
-      major:      getS9Row_(74),
-      large:      getS9Row_(75),
-      dtm:        getS9Row_(76),
-      accountant: getS9Row_(77)
+      national:   getS9Row_(s9Pct),
+      major:      getS9Row_(s9Pct + 1),
+      large:      getS9Row_(s9Pct + 2),
+      dtm:        getS9Row_(s9Pct + 3),
+      accountant: getS9Row_(s9Pct + 4)
     }
   };
 
@@ -801,11 +849,13 @@ function extractAllData_(allData, visData, qi, spreadsheet) {
     slide9.pkgGns.national.qtdPkg, slide9.pkgGns.national.qtdAvg);
 
   // ── SLIDE 10 ──────────────────────────────────────────────
-  var ADV_HDR  = 128;
-  var ADV_MIX  = 134;
-  var ADV_VAR  = 144;
-  var ADV_ITF  = 151;
-  var ADV_ITPY = 158;
+  // Anchor to the current-quarter ADV header (advSec) so rows roll with the tab;
+  // fall back to the FY26 Q4 absolute rows. Sub-block offsets are relative.
+  var ADV_HDR  = advSec ? advSec - 1 : 128;
+  var ADV_MIX  = ADV_HDR + 6;
+  var ADV_VAR  = ADV_HDR + 16;
+  var ADV_ITF  = ADV_HDR + 23;
+  var ADV_ITPY = ADV_HDR + 30;
 
   function getS10Row_(rowIdx) {
     var r = allData[rowIdx];
@@ -869,10 +919,12 @@ function extractAllData_(allData, visData, qi, spreadsheet) {
     slide10.advMix['National Mix'].QTD);
 
   // ── SLIDE 11 ──────────────────────────────────────────────
-  var UPGR_HDR     = 167;
-  var UPGR_ITF_HDR = 179;
-  var UPGR_ITP_HDR = 186;
-  var EMM_HDR      = 194;
+  // Anchor to "ADV Upgrade Events" (upgrSec) so rows roll with the tab; fall
+  // back to the FY26 Q4 absolute rows. Sub-block offsets are relative.
+  var UPGR_HDR     = upgrSec ? upgrSec - 1 : 167;
+  var UPGR_ITF_HDR = UPGR_HDR + 12;
+  var UPGR_ITP_HDR = UPGR_HDR + 19;
+  var EMM_HDR      = UPGR_HDR + 27;
 
   function getS11Row_(rowIdx) {
     var r = allData[rowIdx];
@@ -933,8 +985,10 @@ function extractAllData_(allData, visData, qi, spreadsheet) {
     slide11.advEvents['National']['ITPQ (4 Wk avg vs Q3 avg)']);
 
   // ── SLIDE 12 ──────────────────────────────────────────────
-  var PAY_HDR     = 245;
-  var PAY_ATT_HDR = 252;
+  // Anchor to the current-quarter Payroll header (paySec) so rows roll with the
+  // tab; fall back to the FY26 Q4 absolute rows. Offsets are relative.
+  var PAY_HDR     = paySec ? paySec - 1 : 245;
+  var PAY_ATT_HDR = PAY_HDR + 7;
   var PAY_GNSA_HDR = -1;
   for (var _pg = PAY_HDR + 1; _pg < PAY_HDR + 25; _pg++) {
     var _pgl = String(allData[_pg] ? allData[_pg][1] : '').trim();
@@ -944,8 +998,8 @@ function extractAllData_(allData, visData, qi, spreadsheet) {
       break;
     }
   }
-  var PAY_ITF_HDR  = 266;
-  var PAY_ITPY_HDR = 273;
+  var PAY_ITF_HDR  = PAY_HDR + 21;
+  var PAY_ITPY_HDR = PAY_HDR + 28;
 
   function getS12Row_(rowIdx) {
     var r = allData[rowIdx];
@@ -1008,8 +1062,10 @@ function extractAllData_(allData, visData, qi, spreadsheet) {
   Logger.log('[slide12] gnsA.National=%s', JSON.stringify(slide12.gnsA ? slide12.gnsA['National'] : 'NULL'));
 
   // ── SLIDE 13 ──────────────────────────────────────────────
-  var CANCEL_HDR    = 297;
-  var Q4CANCEL_HDR  = 308;
+  // Anchor to the current-quarter cancel headers (canSec / q4CanSec) so rows
+  // roll with the tab; fall back to the FY26 Q4 absolute rows.
+  var CANCEL_HDR    = canSec   ? canSec   - 1 : 297;
+  var Q4CANCEL_HDR  = q4CanSec ? q4CanSec - 1 : 308;
 
   function getS13Row_(rowIdx) {
     var r = allData[rowIdx];
@@ -1585,7 +1641,7 @@ function updateSlide6_(pres, rootData) {
     try {
       var c0 = tables[i].getCell(0,0).getText().asString().trim();
       var c1 = tables[i].getCell(0,1).getText().asString().trim();
-      if (c0.indexOf('FY26') >= 0 || c0.indexOf('GNS') >= 0 || c1.indexOf('W40') >= 0) {
+      if (c0.indexOf(FY_LABEL) >= 0 || c0.indexOf('GNS') >= 0 || /^w\s*k?\s*\d+$/i.test(c1)) {
         t = tables[i];
         Logger.log('Slide 6: matched GNS table at index ' + i);
         break;
@@ -2047,7 +2103,7 @@ function updateSlide12_(pres, rootData) {
   var tPay = null, tQtd = null, tAttach = null, tGnsA = null, tItf = null, tItpy = null;
   tables.forEach(function(t) {
     var fc = t.getCell(0,0).getText().asString().trim();
-    if (fc.indexOf('FY26') >= 0 && fc.indexOf('Payroll') >= 0) tPay    = t;
+    if (fc.indexOf(FY_LABEL) >= 0 && fc.indexOf('Payroll') >= 0) tPay   = t;
     else if (fc === 'QTD')                                      tQtd    = t;
     else if (fc === 'Payroll Attach')                           tAttach = t;
     else if (fc.indexOf('Payroll GNS') >= 0)                   tGnsA   = t;
@@ -3243,4 +3299,92 @@ function slideHasAnyText_(slide) {
     try { if (shapes[j].getText().asString().trim() !== '') return true; } catch (e) {}
   }
   return false;
+}
+
+// ── Relabel a generated deck's headers to the current quarter ────────────────
+// WHY: the writers match data to columns/sections by HEADER TEXT. Current-quarter
+// data keys are W1..W14 and section titles are FY_LABEL + " " + quarter
+// ("FY27 Q1 …"); the comparison block is PREV_FY_LABEL + " " + PREV_QUARTER
+// ("FY26 Q4 …"). The template is baked with the previous quarter's headers
+// (W40..W53 / "FY26 Q4 …"), and slides 9–13 write positionally so their header
+// TEXT never changes on its own — which is why the deck still showed W41, W42…
+// wkNorm_ folds WK1<->W1 but does NOT turn W40 into W1, so the week NUMBERS must
+// be rewritten here.
+//
+// Called automatically on the fresh COPY by generateWeeklyPresentation (before
+// data is written), so you never hand-edit the template. All FROM values come
+// from the TEMPLATE_* constants; all TO values are derived from the rollover
+// constants (FY_LABEL / PREV_* / QUARTER_CONFIG).
+function relabelDeckHeaders_(pres, ql) {
+  var log = [];
+  var weeks = (QUARTER_CONFIG[ql] && QUARTER_CONFIG[ql].weeks) || [];
+
+  // 1) Week columns: template W40..W53 → the tab's WK labels (WK1..WK14).
+  //    Descending so no shorter token is a prefix of a longer one.
+  for (var i = TEMPLATE_BASE_WEEKS.length - 1; i >= 0; i--) {
+    if (i >= weeks.length) continue;                 // template has more weeks than the quarter
+    var from = TEMPLATE_BASE_WEEKS[i];
+    var to   = 'WK' + (i + 1);
+    var n = pres.replaceAllText(from, to, true);
+    if (n) log.push(from + '→' + to + ' ×' + n);
+  }
+
+  // 2) Section titles — ORDER MATTERS (current quarter before previous quarter,
+  //    so a freshly-written "FY26 Q4" prev title isn't re-swapped).
+  var CUR  = FY_LABEL + ' ' + ql;                    // e.g. "FY27 Q1"
+  var PREV = PREV_FY_LABEL + ' ' + PREV_QUARTER;     // e.g. "FY26 Q4"
+  [
+    [TEMPLATE_BASE_FY_Q,              CUR],                       // current-quarter blocks
+    [TEMPLATE_PREV_FY_Q,             PREV],                      // previous-quarter blocks
+    [TEMPLATE_PKG9_TITLE,            PREV + ' Package GNS'],     // slide 9 prior baseline
+    [TEMPLATE_BASE_FY + ' Cancel Type', FY_LABEL + ' Cancel Type'],
+    [TEMPLATE_BASE_FY + ' WSB',         FY_LABEL + ' WSB'],
+    [TEMPLATE_BASE_FY + ' PKGs',        FY_LABEL + ' PKGs'],
+    [TEMPLATE_PREV_FY + ' PKGs',        PREV_FY_LABEL + ' PKGs']
+  ].forEach(function (p) {
+    var m = pres.replaceAllText(p[0], p[1], true);
+    if (m) log.push('"' + p[0] + '"→"' + p[1] + '" ×' + m);
+  });
+
+  // 3) Quarter-total column headers: exact single-cell matches only, so we never
+  //    corrupt a "FY26 Q4"-style phrase. Current total → ql, previous → PREV_QUARTER.
+  log.push('exact ' + PREV_QUARTER + '→' + ql + ' ×' + relabelExactCells_(pres, PREV_QUARTER, ql));
+  // The template's previous-quarter total (Q3) becomes PREV_QUARTER (Q4).
+  if (TEMPLATE_PREV_FY_Q.indexOf(' ') >= 0) {
+    var tmplPrevQ = TEMPLATE_PREV_FY_Q.split(' ')[1];            // "Q3"
+    if (tmplPrevQ && tmplPrevQ !== PREV_QUARTER)
+      log.push('exact ' + tmplPrevQ + '→' + PREV_QUARTER + ' ×' + relabelExactCells_(pres, tmplPrevQ, PREV_QUARTER));
+  }
+
+  Logger.log('[relabel] deck relabeled for ' + CUR + ':\n' + log.join('\n'));
+}
+
+// Manual entry point: relabel an already-generated deck's headers in place, by
+// id (e.g. to fix the visible "W41" labels on a deck without a full re-run).
+// NOTE: this only fixes header TEXT — it does not recompute numbers, and slides
+// 6/8 (which match data by header text at generation time) still need a full
+// re-run of generateWeeklyPresentation to populate. Prefer re-running.
+function relabelDeckHeadersById(presentationId) {
+  var pres = SlidesApp.openById(presentationId);
+  relabelDeckHeaders_(pres, getQuarterInfo_(CURRENT_WEEK).quarter);
+  pres.saveAndClose();
+  Logger.log('[relabel] done for ' + presentationId);
+}
+
+// Exact-match a standalone cell value across every table cell, then overwrite.
+function relabelExactCells_(pres, from, to) {
+  var count = 0;
+  pres.getSlides().forEach(function (s) {
+    s.getTables().forEach(function (t) {
+      for (var r = 0; r < t.getNumRows(); r++) {
+        for (var c = 0; c < t.getNumColumns(); c++) {
+          try {
+            var cellText = t.getCell(r, c).getText();
+            if (cellText.asString().trim() === from) { cellText.setText(to); count++; }
+          } catch (e) {}
+        }
+      }
+    });
+  });
+  return count;
 }
