@@ -388,8 +388,9 @@ function generateAllFormulas(targetSheet) {
     range.setFontColors(newColors);
   });
 
-  // ── Pass 3: row-3 "x" markers ─────────────────────────────────────────────
-  writeRow3Markers(dashSheet, columnResolved);
+  // ── Pass 3: row-3 "x" markers for COMPLETED weeks (calendar-driven) ───────
+  const marks = writeRow3Markers(dashSheet, weekNumbers);
+  Logger.log(`Row-3 markers: ${marks.note}`);
 
   // ── Pass 4: STEP 1 — calendar-driven current-week flip (override) ─────────
   // v19: uses the SAME cap as Pass 1 so CURRENT_WEEK_OVERRIDE governs the colour
@@ -875,9 +876,36 @@ function buildDateLabel(start, end) {
 }
 
 // ── ROW 3 MARKERS ───────────────────────────────────────────────────────────
-function writeRow3Markers(dashSheet, columnResolved) {
-  const rowRange = dashSheet.getRange(ROW3_MARKER_ROW, WEEK_START_COL, 1, NUM_WEEKS);
-  rowRange.setValues([columnResolved.map(resolved => resolved ? "x" : "")]);
+// v22: mark every COMPLETED week (its calendar week_end_date is strictly before
+// today) with an "x" in row 3; all other weeks blank. Calendar-driven so it no
+// longer depends on whether EVERY managed cell in the column resolved — the old
+// columnResolved approach left a column blank if any single row had a 0 count
+// (so completed weeks like W1/W2 never got an "x"). Week numbers are scoped to
+// the tab's FY/quarter (week_for_year_fy repeats across years in the cache). If
+// the calendar can't be read, the existing markers are left untouched.
+function writeRow3Markers(dashSheet, weekNumbers) {
+  let rows;
+  try {
+    rows = readCalendarRows();
+  } catch (e) {
+    return { note: `calendar unavailable (${e.message}) — row-3 markers left as-is` };
+  }
+  const tabFq = parseTabFyQuarter(dashSheet.getName());
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const endByWeek = {};
+  rows.forEach(r => {
+    if (r.week == null || !r.end) return;
+    if (tabFq && !(r.fy === tabFq.fy && r.quarter === tabFq.quarter)) return;
+    endByWeek[r.week] = r.end;
+  });
+  const marks = weekNumbers.map(wk => {
+    if (wk == null) return "";
+    const end = endByWeek[wk];
+    return (end && end < today) ? "x" : "";
+  });
+  dashSheet.getRange(ROW3_MARKER_ROW, WEEK_START_COL, 1, NUM_WEEKS).setValues([marks]);
+  const done = weekNumbers.filter((wk, i) => marks[i] === "x");
+  return { note: `x on completed weeks: ${done.length ? done.map(w => "W" + w).join(", ") : "(none yet)"}` };
 }
 
 // ── COUNT LOOKUP (unchanged from v14) ───────────────────────────────────────
