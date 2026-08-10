@@ -287,17 +287,11 @@ function generateAllFormulas(targetSheet) {
           continue;
         }
 
-        // v16/v19: future week (beyond the cap) — never write a fresh value and
-        // FORCE forecast blue. v22: if the cell still holds a generator-written
-        // Raw_Data COUNTIFS from a previous run (e.g. the in-progress week that
-        // used to be treated as actual), CLEAR it so it reverts to forecast and
-        // stops showing a stale partial count. Genuine forecast formulas/values
-        // (references like =E84, typed numbers) are NOT COUNTIFS-on-Raw_Data, so
-        // they are preserved untouched.
+        // v16/v19: future week (beyond the cap) — never write a value. Keep the
+        // existing value but FORCE forecast blue, so a cell that was wrongly
+        // blackened is restored and can't be zeroed next run.
         if (weekNum > weekCap.cap) {
-          const existing = cell.getFormula();
-          const isStaleActual = /countifs/i.test(existing) && new RegExp(RAW_DATA_TAB, "i").test(existing);
-          formulaRow.push(isStaleActual ? "" : (existing || cell.getValue()));
+          formulaRow.push(cell.getFormula() || cell.getValue());
           colorRow.push(FORECAST_COLOR);
           skipped++;
           columnResolved[weekOffset] = false;
@@ -457,13 +451,7 @@ function getCurrentWeekCap_(dashSheet) {
   const cmp = fqRank(pos) - fqRank(tabFq);
   if (cmp > 0)  return { cap: Infinity,  reliable: true, note: `tab quarter is in the past — all weeks actual` };
   if (cmp < 0)  return { cap: -Infinity, reliable: true, note: `tab quarter is in the future (now = FY${pos.fy} Q${pos.quarter}) — no weeks actual yet` };
-  // v22: actuals go only through the LAST COMPLETED week. The in-progress
-  // current week (pos.week) stays forecast until it finishes, so a partially-
-  // populated Raw_Data week can't post a wrong low "actual" — and this matches
-  // the row-3 "x" markers (which mark a week done only once week_end < today).
-  // Need the live week included? Set CURRENT_WEEK_OVERRIDE = pos.week.
-  const lastComplete = pos.week - 1;
-  return { cap: lastComplete, reliable: true, note: `now = FY${pos.fy} Q${pos.quarter} W${pos.week} (in progress) — actuals through W${lastComplete}` };
+  return { cap: pos.week, reliable: true, note: `now = FY${pos.fy} Q${pos.quarter} W${pos.week} — actuals through W${pos.week}` };
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -888,36 +876,9 @@ function buildDateLabel(start, end) {
 }
 
 // ── ROW 3 MARKERS ───────────────────────────────────────────────────────────
-// v22: mark every COMPLETED week (its calendar week_end_date is strictly before
-// today) with an "x" in row 3; all other weeks blank. Calendar-driven so it no
-// longer depends on whether EVERY managed cell in the column resolved — the old
-// columnResolved approach left a column blank if any single row had a 0 count
-// (so completed weeks like W1/W2 never got an "x"). Week numbers are scoped to
-// the tab's FY/quarter (week_for_year_fy repeats across years in the cache). If
-// the calendar can't be read, the existing markers are left untouched.
-function writeRow3Markers(dashSheet, weekNumbers) {
-  let rows;
-  try {
-    rows = readCalendarRows();
-  } catch (e) {
-    return { note: `calendar unavailable (${e.message}) — row-3 markers left as-is` };
-  }
-  const tabFq = parseTabFyQuarter(dashSheet.getName());
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const endByWeek = {};
-  rows.forEach(r => {
-    if (r.week == null || !r.end) return;
-    if (tabFq && !(r.fy === tabFq.fy && r.quarter === tabFq.quarter)) return;
-    endByWeek[r.week] = r.end;
-  });
-  const marks = weekNumbers.map(wk => {
-    if (wk == null) return "";
-    const end = endByWeek[wk];
-    return (end && end < today) ? "x" : "";
-  });
-  dashSheet.getRange(ROW3_MARKER_ROW, WEEK_START_COL, 1, NUM_WEEKS).setValues([marks]);
-  const done = weekNumbers.filter((wk, i) => marks[i] === "x");
-  return { note: `x on completed weeks: ${done.length ? done.map(w => "W" + w).join(", ") : "(none yet)"}` };
+function writeRow3Markers(dashSheet, columnResolved) {
+  const rowRange = dashSheet.getRange(ROW3_MARKER_ROW, WEEK_START_COL, 1, NUM_WEEKS);
+  rowRange.setValues([columnResolved.map(resolved => resolved ? "x" : "")]);
 }
 
 // ── COUNT LOOKUP (unchanged from v14) ───────────────────────────────────────
@@ -1037,6 +998,55 @@ function whatWeekIsIt() {
   );
 }
 
+// ── DAILY AUTO-RUN TRIGGER ────────────────────────────────────────────────────
+// The name of the trigger handler function. Keep this in sync with the function
+// below and with installDailyTrigger() / removeDailyTrigger().
+const DAILY_TRIGGER_HANDLER = "runDailyFormulas";
+const DAILY_TRIGGER_HOUR    = 10;   // 24-hour clock, script's time zone
+const DAILY_TRIGGER_MINUTE  = 30;   // Apps Script fires within the hour; see note below.
+
+// Trigger-safe entry point. A time-based trigger passes an EVENT object as the
+// first argument, so we must NOT forward it to generateAllFormulas (which would
+// treat it as a target sheet). Call with no args so it resolves DASHBOARD_TAB.
+function runDailyFormulas(e) {
+  generateAllFormulas();   // ignore trigger event arg on purpose
+}
+
+// Installs (or re-installs) the daily time-based trigger. Safe to run multiple
+// times — it clears any existing runDailyFormulas triggers first so you never
+// end up with duplicates. Run this ONCE from the editor (or the menu) to arm it.
+function installDailyTrigger() {
+  removeDailyTrigger();   // avoid duplicate triggers
+
+  ScriptApp.newTrigger(DAILY_TRIGGER_HANDLER)
+    .timeBased()
+    .everyDays(1)
+    .atHour(DAILY_TRIGGER_HOUR)
+    .nearMinute(DAILY_TRIGGER_MINUTE)   // Apps Script runs sometime in the 10:00–11:00 window
+    .create();
+
+  // Guard getUi() so this also works if invoked from a non-UI context.
+  try {
+    SpreadsheetApp.getUi().alert(
+      `Daily trigger installed.\n\n"${DAILY_TRIGGER_HANDLER}" will run ` +
+      `generateAllFormulas() every day around ${DAILY_TRIGGER_HOUR}:` +
+      `${("" + DAILY_TRIGGER_MINUTE).padStart(2, "0")} ` +
+      `(script time zone). Note: Apps Script fires within the hour, not on the exact minute.`
+    );
+  } catch (err) {
+    Logger.log(`Daily trigger installed for ${DAILY_TRIGGER_HANDLER}.`);
+  }
+}
+
+// Removes any existing daily triggers for runDailyFormulas.
+function removeDailyTrigger() {
+  ScriptApp.getProjectTriggers().forEach(t => {
+    if (t.getHandlerFunction() === DAILY_TRIGGER_HANDLER) {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+}
+
 // ── MENU ─────────────────────────────────────────────────────────────────────
 function onOpen() {
   SpreadsheetApp.getUi()
@@ -1045,5 +1055,8 @@ function onOpen() {
     .addSeparator()
     .addItem("What week is it? (diagnostic)", "whatWeekIsIt")
     .addItem("Roll over to next quarter", "rolloverToNextQuarter")
+    .addSeparator()
+    .addItem("Install daily 10:30 AM auto-run", "installDailyTrigger")
+    .addItem("Remove daily auto-run", "removeDailyTrigger")
     .addToUi();
 }

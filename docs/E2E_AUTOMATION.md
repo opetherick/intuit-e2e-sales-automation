@@ -272,6 +272,8 @@ open (`onOpen`):
 - **Generate All Formulas (+ current-week flip)** → `generateAllFormulas()`
 - **What week is it? (diagnostic)** → `whatWeekIsIt()`
 - **Roll over to next quarter** → `rolloverToNextQuarter()`
+- **Install daily 10:30 AM auto-run** → `installDailyTrigger()`
+- **Remove daily auto-run** → `removeDailyTrigger()`
 
 ### What `generateAllFormulas()` does (4 passes)
 1. **Pass 1 — full-write tables** (`FULL_WRITE_TABLES`: GNS r6, PKG_GNS_ACCOUNTANT
@@ -297,6 +299,36 @@ the cap, in priority order:
 > **Colour convention:** forecast = blue `#0000ff`, actual = black `#000000`.
 > **Manual rows** (`MANUAL_ROWS = [42]`, the "NAM BDO" line) are never written or
 > recoloured.
+
+### Daily auto-run trigger (10:30 AM)
+`generateAllFormulas()` can run itself every morning so the dashboard refreshes
+without anyone opening the sheet.
+
+- **Arm it once:** Apps Script menu **Canada Dashboard → Install daily 10:30 AM
+  auto-run** (or run `installDailyTrigger()` from the editor). This is a one-time
+  action per script project — the trigger persists until removed.
+- **What runs:** a time-based trigger calls `runDailyFormulas()`, a thin wrapper
+  that calls `generateAllFormulas()` with no arguments. The wrapper exists on
+  purpose: a time-based trigger passes an **event object** as the first argument,
+  and forwarding that into `generateAllFormulas(targetSheet)` would break it — so
+  the trigger must point at `runDailyFormulas`, never directly at
+  `generateAllFormulas`.
+- **Timing caveat:** Apps Script time-based triggers fire within the hour, **not**
+  on the exact minute. A 10:30 AM trigger runs sometime in the 10:00–11:00 window.
+  Adjust `DAILY_TRIGGER_HOUR` / `DAILY_TRIGGER_MINUTE` at the top of the trigger
+  block to change it.
+- **Time zone:** the hour follows the Apps Script project's time zone
+  (**File → Project Settings → Time zone** in the editor). Confirm it's the zone
+  you expect before relying on 10:30.
+- **No pop-ups on a trigger:** the auto-run has no UI. If a required tab is missing
+  the function returns quietly (the alert only shows on a manual run); check
+  **Executions** in the Apps Script editor to see trigger runs and any failures.
+- **Re-installing is safe:** `installDailyTrigger()` deletes any existing
+  `runDailyFormulas` triggers first, so you won't get duplicates. To turn it off,
+  use **Remove daily auto-run** (`removeDailyTrigger()`).
+- **Reminder:** the trigger only regenerates formulas from whatever is already in
+  `Raw_Data`. It does **not** run the Python pipeline — `Raw_Data` must be
+  refreshed separately (see §4/§6) for the numbers to actually change.
 
 ### Quarter/year rollover (`rolloverToNextQuarter()`)
 Clones the current dashboard tab into the next quarter, relabels week headers +
@@ -443,10 +475,18 @@ numbers*, but the config constants and the new tab are manual.
 
 **4. `Code.js` (deck generator)**
 
+_At quarter close (before rolling forward) — freeze the finished quarter:_
+The dashboard tabs are full of `COUNTIFS` that read `Raw_Data`. When the next quarter's pipeline overwrites `Raw_Data`, those formulas recompute to **0** and the finished quarter's history disappears. To keep it, run **`freezeCurrentQuarter()`** once — **after** the quarter's final pipeline run and **before** the next quarter repopulates `Raw_Data`. It converts the current `E2E …` tab **and** its visuals tab from formulas to their current static values (number formats, colours, and conditional formatting are preserved).
+- It reads the quarter + workbook from `QUARTER_CONFIG[CURRENT_WEEK]`, so set `CURRENT_WEEK` to the closing quarter before running (i.e. freeze *then* roll the knobs below).
+- To freeze any single tab manually: `freezeQuarterTab(spreadsheetId, tabName)`.
+- It's destructive (formulas → values). Sheets keeps **File → Version history**; for extra safety, right-click the tab → **Duplicate** and freeze the copy.
+- Equivalent by hand: select the tab → **Copy** → **Edit ▸ Paste special ▸ Values only**.
+
 _Every quarter:_
 - `CURRENT_WEEK` / `CURRENT_WEEK_NUM` — the weekly knobs; set to the week you're **reporting** (the last completed week, e.g. `W2` while `W3` is in progress).
 - `QUARTER_CONFIG` — add an entry for the new quarter (its `weeks`, `spreadsheetId`, `tabName`). The run auto-selects by matching `CURRENT_WEEK` against each entry's `weeks`.
-- `VISUALS_TAB_NAME` — repoint at the new quarter's visuals tab (the one holding the `F149` week-driver cell). A wrong name just no-ops with a log line, but visuals-sourced rows (pipeline, team slides, EMM) go blank.
+  - ⚠ **`spreadsheetId` is not `RAW_DATA_SPREADSHEET_ID`.** There are **two** ids in the file and they're easy to confuse: `RAW_DATA_SPREADSHEET_ID` is used **only** for `Pipeline_Meta` (the freshness stamp in `A1` and the AI summary in `B1`). The deck's actual **numbers** come from `QUARTER_CONFIG[quarter].spreadsheetId`. Point it at the workbook where the new quarter's `E2E …` tab **and** visuals tab actually live. (FY27 Q1 lives in the same workbook as `Pipeline_Meta`, `1qp6eTw9…`; the old FY26 quarters used `1BSs8I9…`.) If the deck shows last quarter's numbers even though the tab name is right, this id is the first thing to check.
+- `VISUALS_TAB_NAME` — repoint at the new quarter's visuals tab (the one holding the `F149` week-driver cell). It must live in the **same** `QUARTER_CONFIG` `spreadsheetId` workbook as the `E2E …` tab. A wrong name just no-ops with a log line, but visuals-sourced rows (pipeline, team slides, EMM) go blank.
 
 _Every fiscal year (Q1) — additionally:_
 - `FY_LABEL` — the fiscal-year prefix on the tab's **section headers** (`"FY27 Q1 GNS"`, `"FY27 Q1 Payroll"`, …). One change re-points ~10 current-quarter section lookups. Requires the tab's section titles to actually read `FY_LABEL + " " + quarter`.
@@ -468,8 +508,10 @@ _Does NOT roll automatically (manual, by design):_
 - **Fixed row indices** (`ADV_HDR=128`, `PAY_HDR=245`, `getS9Row_(65)`, …) assume the tab was **cloned** from the previous quarter (same row layout). If the tab was rebuilt, re-verify these against the new tab.
 
 **5. Sanity checks after the first run of the new quarter**
+- **Froze the prior quarter?** Confirm the previous quarter's `E2E …` tab still shows its real numbers (not `0`). If it went to zeros, you rolled `Raw_Data` before running `freezeCurrentQuarter()` — recover the tab from **File → Version history** (pick a version from before the roll) and freeze it.
 - Run the pipeline, then in Apps Script run **What week is it?** (`whatWeekIsIt()`) to confirm the calendar reports the expected FY/Q/week.
 - Run **Generate All Formulas** and confirm completed weeks flip to actual (black) and future weeks stay forecast (blue).
+- Generate the deck and spot-check slides 9–13 pull the **new** quarter's numbers (not last quarter's) — if not, re-check `QUARTER_CONFIG[quarter].spreadsheetId` (see the ⚠ above) and the `debugLogSections_` log lines.
 
 > **Fiscal week numbers reset every fiscal year.** `week_for_year_fy` runs 1–53
 > across the FY, so the quarters are roughly **Q1 = W1–13, Q2 = W14–26,
