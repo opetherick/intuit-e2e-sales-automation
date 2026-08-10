@@ -287,11 +287,17 @@ function generateAllFormulas(targetSheet) {
           continue;
         }
 
-        // v16/v19: future week (beyond the cap) — never write a value. Keep the
-        // existing value but FORCE forecast blue, so a cell that was wrongly
-        // blackened is restored and can't be zeroed next run.
+        // v16/v19: future week (beyond the cap) — never write a fresh value and
+        // FORCE forecast blue. v22: if the cell still holds a generator-written
+        // Raw_Data COUNTIFS from a previous run (e.g. the in-progress week that
+        // used to be treated as actual), CLEAR it so it reverts to forecast and
+        // stops showing a stale partial count. Genuine forecast formulas/values
+        // (references like =E84, typed numbers) are NOT COUNTIFS-on-Raw_Data, so
+        // they are preserved untouched.
         if (weekNum > weekCap.cap) {
-          formulaRow.push(cell.getFormula() || cell.getValue());
+          const existing = cell.getFormula();
+          const isStaleActual = /countifs/i.test(existing) && new RegExp(RAW_DATA_TAB, "i").test(existing);
+          formulaRow.push(isStaleActual ? "" : (existing || cell.getValue()));
           colorRow.push(FORECAST_COLOR);
           skipped++;
           columnResolved[weekOffset] = false;
@@ -451,7 +457,13 @@ function getCurrentWeekCap_(dashSheet) {
   const cmp = fqRank(pos) - fqRank(tabFq);
   if (cmp > 0)  return { cap: Infinity,  reliable: true, note: `tab quarter is in the past — all weeks actual` };
   if (cmp < 0)  return { cap: -Infinity, reliable: true, note: `tab quarter is in the future (now = FY${pos.fy} Q${pos.quarter}) — no weeks actual yet` };
-  return { cap: pos.week, reliable: true, note: `now = FY${pos.fy} Q${pos.quarter} W${pos.week} — actuals through W${pos.week}` };
+  // v22: actuals go only through the LAST COMPLETED week. The in-progress
+  // current week (pos.week) stays forecast until it finishes, so a partially-
+  // populated Raw_Data week can't post a wrong low "actual" — and this matches
+  // the row-3 "x" markers (which mark a week done only once week_end < today).
+  // Need the live week included? Set CURRENT_WEEK_OVERRIDE = pos.week.
+  const lastComplete = pos.week - 1;
+  return { cap: lastComplete, reliable: true, note: `now = FY${pos.fy} Q${pos.quarter} W${pos.week} (in progress) — actuals through W${lastComplete}` };
 }
 
 /* ════════════════════════════════════════════════════════════════════════
